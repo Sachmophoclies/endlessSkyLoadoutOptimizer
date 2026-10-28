@@ -33,13 +33,12 @@ export function buildProblem(o: BuildOptions): Built {
 	const n = group.ships.length;
 	const licensed = new Set(save.licenses);
 
-	// Total owned: installed on this group, in storage, in cargo (and on other ships when stripping is allowed).
+	// Total owned: installed on any of your ships, in storage, in cargo.
 	const owned = new Map<string, number>();
 	const add = (name: string, count: number): void => void owned.set(name, (owned.get(name) ?? 0) + count);
 	for(const ship of save.ships)
-		if(group.ships.includes(ship) || con.canStrip)
-			for(const [name, c] of Object.entries(ship.outfits))
-				add(name, c);
+		for(const [name, c] of Object.entries(ship.outfits))
+			add(name, c);
 	for(const [name, c] of Object.entries(save.storage))
 		add(name, c);
 	for(const [name, c] of Object.entries(save.cargo))
@@ -51,6 +50,10 @@ export function buildProblem(o: BuildOptions): Built {
 		if(x.weapon?.ammo?.usage)
 			ammoNames.add(x.weapon.ammo.outfit);
 
+	// Copies of an outfit can be bought, or (if allowed) plundered: not sold anywhere, no license needed.
+	const buyableOf = (data: OutfitData): boolean => data.sold && (con.ignoreLicenses || data.licenses.every(l => licensed.has(l)));
+	const obtainable = (data: OutfitData): boolean => buyableOf(data) || (con.plunder && data.plunderable);
+
 	const candidates: Array<{ data: OutfitData; max: number }> = [];
 	for(const data of o.outfits)
 	{
@@ -59,9 +62,8 @@ export function buildProblem(o: BuildOptions): Built {
 		if(!hasCost && !current)
 			continue;
 		const ownedPerShip = Math.floor((owned.get(data.name) ?? 0) / n);
-		const buyable = data.sold && (con.ignoreLicenses || data.licenses.every(l => licensed.has(l)));
-		let max = buyable && !con.ownedLimits ? MAX_UNBOUNDED : ownedPerShip;
-		if(!buyable && !current && ownedPerShip === 0)
+		let max = obtainable(data) && !con.ownedLimits ? MAX_UNBOUNDED : ownedPerShip;
+		if(!obtainable(data) && !current && ownedPerShip === 0)
 			continue;
 		let banned = !o.sources.has(data.source);
 		const w = data.weapon;
@@ -108,8 +110,7 @@ export function buildProblem(o: BuildOptions): Built {
 		havePerShip: candidates.map(c => Math.floor((owned.get(c.data.name) ?? 0) / n)), shipCount: n,
 	};
 	const ownedPerShip = candidates.map(c => {
-		const buyable = c.data.sold && (con.ignoreLicenses || c.data.licenses.every(l => licensed.has(l)));
-		return buyable && !con.ownedLimits ? Infinity : Math.floor((owned.get(c.data.name) ?? 0) / n);
+		return obtainable(c.data) && !con.ownedLimits ? Infinity : Math.floor((owned.get(c.data.name) ?? 0) / n);
 	});
 	return { problem, baseline, ownedPerShip, shipCount: n };
 }
@@ -127,8 +128,8 @@ function hullBound(data: OutfitData, hull: Record<string, number>): number {
 }
 
 // Non-negotiables that cannot be met. The jump-drive error appears if and only if "must have jump drive" is on,
-// "can strip outfits from other ships" is off, and the group's own ships plus storage and cargo hold fewer than
-// one jump drive per ship (havePerShip counts exactly those sources when stripping is off).
+// plunderable outfits are off, nothing sells a jump drive, and your ships, storage and cargo hold fewer than
+// one jump drive per ship in this group.
 export function unsatisfiable(problem: Problem): string[] {
 	const con = problem.constraints;
 	const out: string[] = [];
@@ -136,8 +137,8 @@ export function unsatisfiable(problem: Problem): string[] {
 		|| problem.pool.some((p, i) => (p.attrs[key] ?? 0) > 0 && (problem.havePerShip[i] > 0 || p.max > 0));
 	if(con.requireHyperdrive && !hasDrive("hyperdrive") && !hasDrive("scram drive"))
 		out.push("Must have hyperdrive: no hyperdrive or scram drive is available to every ship in this group");
-	if(con.requireJumpDrive && !con.canStrip && !hasDrive("jump drive"))
-		out.push(`Must have jump drive: stripping other ships is off, and this group's ships, storage and cargo hold no jump drive to give each of its ${problem.shipCount} ships`);
+	if(con.requireJumpDrive && !con.plunder && !hasDrive("jump drive"))
+		out.push(`Must have jump drive: "Include plunderable outfits" is off, and your ships, storage and cargo hold no jump drive to give each of this group's ${problem.shipCount} ships`);
 	for(const attribute of con.requiredAttributes)
 		if(!hasDrive(attribute))
 			out.push(`Must have ${attribute}: no outfit that provides it is available to every ship in this group`);

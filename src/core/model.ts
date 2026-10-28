@@ -35,14 +35,10 @@ export interface Constraints {
 	heatSustainable: boolean;
 	ownedLimits: boolean;
 	ignoreLicenses: boolean;
-	canStrip: boolean;
+	plunder: boolean;
 	minFuel: number;
 	minCargo: number;
 	minBunks: number;
-	// Turning may not fall below this percentage of the current loadout (0 = off).
-	minTurnPercent: number;
-	// Most credits to spend on new outfits for the whole group (0 = no limit).
-	budget: number;
 	// Ship attributes every ship must have, e.g. "quantum keystone" (needed to land on planets that "require" it).
 	requiredAttributes: string[];
 }
@@ -50,8 +46,8 @@ export interface Constraints {
 export const DEFAULT_CONSTRAINTS: Constraints = {
 	instantaneousOnly: true, noAmmo: true, requireHyperdrive: true, requireJumpDrive: true,
 	positiveEnergy: true, heatSustainable: true, ownedLimits: false, ignoreLicenses: false,
-	canStrip: true, minFuel: 0, minCargo: 0, minBunks: 0,
-	minTurnPercent: 70, budget: 0, requiredAttributes: [],
+	plunder: true, minFuel: 0, minCargo: 0, minBunks: 0,
+	requiredAttributes: [],
 };
 
 // Advanced options: status-damage weights and model parameters.

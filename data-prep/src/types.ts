@@ -43,6 +43,8 @@ export interface OutfitData {
 	weapon: WeaponInfo | null;
 	// Outfits sold in at least one reachable outfitter.
 	sold: boolean;
+	// Not sold anywhere, but carried by ships in the game, so it can only be had by plundering them.
+	plunderable: boolean;
 }
 
 export interface ShipData {

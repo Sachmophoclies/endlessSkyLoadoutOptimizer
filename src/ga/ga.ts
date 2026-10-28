@@ -49,18 +49,12 @@ export function mulberry32(seed: number): () => number {
 // Maps raw stats to fitness. Each stat is scored against the group's current loadout (capped at 1.5x),
 // so one huge stat cannot swamp the rest. Stats the current loadout lacks (reference 0) fall back to the
 // running maximum seen so far. Workers return raw stats; normalisation happens here.
-// Two soft limits sit below every feasible score: a turning floor and the credit budget.
-const TURNING = STAT_KEYS.indexOf("turning");
-const INFEASIBLE = 10;
-
 class Scorer {
 	readonly hi = new Float64Array(STAT_KEYS.length).fill(1e-9);
 	private ref: Float64Array | null = null;
 	private problem: Problem;
-	private ownedPerShip: number[];
-	constructor(problem: Problem, ownedPerShip: number[]) {
+	constructor(problem: Problem) {
 		this.problem = problem;
-		this.ownedPerShip = ownedPerShip;
 	}
 
 	// The first result is the current loadout; its stats are the reference even if it breaks a constraint.
@@ -77,38 +71,9 @@ class Scorer {
 						this.hi[k] = r.stats[k];
 	}
 
-	// Credits to buy for the whole group: copies beyond what you already hold, per ship.
-	spend(genome: Genome): number {
-		const p = this.problem;
-		let total = 0;
-		for(let i = 0; i < p.pool.length; ++i)
-		{
-			const need = genome[i] - p.havePerShip[i];
-			if(need > 0)
-				total += need * p.pool[i].cost;
-		}
-		return total * p.shipCount;
-	}
-
-	fitness(r: EvalResult, genome: Genome): number {
+	fitness(r: EvalResult): number {
 		if(r.violation > 0)
 			return -r.violation;
-		const con = this.problem.constraints;
-		let over = 0;
-		if(this.ref && con.minTurnPercent > 0)
-		{
-			const floor = this.ref[TURNING] * con.minTurnPercent / 100;
-			if(r.stats[TURNING] < floor)
-				over += (floor - r.stats[TURNING]) / floor;
-		}
-		if(con.budget > 0)
-		{
-			const spent = this.spend(genome);
-			if(spent > con.budget)
-				over += (spent - con.budget) / con.budget;
-		}
-		if(over > 0)
-			return -INFEASIBLE - over;
 		const w = this.problem.weights;
 		let sum = 0, total = 0;
 		for(let k = 0; k < STAT_KEYS.length; ++k)
@@ -134,7 +99,7 @@ export async function runGA(
 	const n = pool.length;
 	const maxOf = pool.map((p, i) => Math.min(p.max, ownedPerShip[i] ?? p.max));
 	const usable = maxOf.map((m, i) => (m > 0 ? i : -1)).filter(i => i >= 0);
-	const scorer = new Scorer(problem, ownedPerShip);
+	const scorer = new Scorer(problem);
 
 	const used = new Float64Array(problem.capKeys.length);
 	const recompute = (g: Genome): void => {
@@ -244,10 +209,10 @@ export async function runGA(
 			genome, result: results[i], fitness: 0,
 		}));
 		for(const ind of scored)
-			ind.fitness = scorer.fitness(ind.result, ind.genome);
+			ind.fitness = scorer.fitness(ind.result);
 		// Re-score the archive under the current normalisation.
 		for(const ind of archive)
-			ind.fitness = scorer.fitness(ind.result, ind.genome);
+			ind.fitness = scorer.fitness(ind.result);
 		scored.sort((a, b) => b.fitness - a.fitness);
 
 		archive = updateArchive(archive.concat(scored.slice(0, Math.max(params.topN * 4, 10))), params.topN);
@@ -320,7 +285,7 @@ export async function runGA(
 			const results = await evaluate(trials);
 			let pick = -1, pickFit = ind.fitness - 1e-9;
 			results.forEach((r, k) => {
-				const f = scorer.fitness(r, trials[k]);
+				const f = scorer.fitness(r);
 				if(r.violation === 0 && f >= pickFit)
 				{
 					pickFit = f;

@@ -43,17 +43,37 @@ function expandSimple(s: Simple): Weights {
 	};
 }
 
-const CONSTRAINT_LABELS: Array<[keyof Constraints, string]> = [
-	["instantaneousOnly", "Instantaneous weapons only"],
-	["noAmmo", "No ammo weapons"],
-	["requireHyperdrive", "Must have hyperdrive"],
-	["requireJumpDrive", "Must have jump drive"],
-	["positiveEnergy", "Positive energy balance (firing everything)"],
-	["heatSustainable", "Heat sustainable (firing everything)"],
-	["ownedLimits", "Owned-count limits (use only what I own)"],
-	["ignoreLicenses", "Ignore licenses"],
-	["canStrip", "Can strip outfits from other ships"],
+// The third entry marks a box that is ticked when the setting is off ("Ignore ..." wording).
+const CONSTRAINT_LABELS: Array<[keyof Constraints, string, boolean?, string?]> = [
+	["instantaneousOnly", "Instantaneous weapons only", false,
+		"Instantaneous weapons (beams) hit the moment they fire, so damage stops as soon as your escorts stop shooting. " +
+		"Any other weapon leaves projectiles in flight that still land after the trigger is released, and they can destroy an enemy you meant to disable or capture."],
+	["noAmmo", "Do not use ammunition", false,
+		"Leaves out weapons that spend ammunition, such as missiles and torpedoes. They stop working when the ammo runs out and have to be restocked."],
+	["plunder", "Include plunderable outfits", false,
+		"Allows outfits that no outfitter sells and that you can only get by plundering enemy ships, such as many Korath and Quarg outfits. " +
+		"They are assumed to be available in any number, with no license needed. Off: only outfits you own or can buy count."],
+	["positiveEnergy", "Ignore energy when firing", true,
+		"Unticked: a loadout is rejected if its generators and batteries cannot power every weapon firing at once (batteries are counted for about 30 seconds). " +
+		"Ticked: such loadouts are allowed, but their offence is reduced to what the energy can support."],
+	["heatSustainable", "Ignore heat when firing", true,
+		"Unticked: a loadout is rejected if firing every weapon would push the ship past 90% of its heat capacity once it settles. " +
+		"Ticked: such loadouts are allowed, but their offence is reduced to what the cooling can support."],
+	["ownedLimits", "Owned outfits only", false,
+		"Uses only the copies you already own, so there is nothing to buy. Off: any outfit sold by the selected sources can be bought in any number."],
+	["ignoreLicenses", "Ignore licenses", false,
+		"Outfits that need a license you do not hold are normally left out. Ticked: they are allowed anyway."],
 ];
+const MUST_CONTAIN: Array<[keyof Constraints, string, string]> = [
+	["requireHyperdrive", "Hyperdrive", "Every ship must carry a hyperdrive (or a scram drive) so it can travel between linked systems."],
+	["requireJumpDrive", "Jump drive", "Every ship must carry a jump drive, which can also reach systems that are not linked by hyperlane. If you also turn off plunderable outfits and no jump drive is available, the search reports an error."],
+];
+const ATTRIBUTE_INFO = "Some planets only let you land if the ship carries this. Greyed out until your save has reached an outfit that provides it.";
+const MINIMUM_INFO = {
+	minFuel: "Rejects loadouts whose fuel capacity is below this.",
+	minCargo: "Rejects loadouts whose cargo space is below this.",
+	minBunks: "Rejects loadouts with fewer spare bunks than this. Spare bunks are bunks beyond the crew the ship needs, and they hold boarding parties.",
+};
 
 const fmt = (v: number): string => (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : v.toFixed(Math.abs(v) < 10 ? 2 : 1));
 
@@ -123,9 +143,10 @@ export function App() {
 		const have = obtainableOutfits(save, mapData.planetSets, outfitSets);
 		return new Set(accessAttributes.filter(a => providers(a).some(o => have.has(o.name))));
 	}, [save, mapData, outfitSets, accessAttributes, outfits]);
+	// Whatever the save has reached is ticked by default; the rest stay unticked.
 	useEffect(() => {
 		if(reachable)
-			setConstraints(c => c.requiredAttributes.every(a => reachable.has(a)) ? c : { ...c, requiredAttributes: c.requiredAttributes.filter(a => reachable.has(a)) });
+			setConstraints(c => ({ ...c, requiredAttributes: [...reachable] }));
 	}, [reachable]);
 
 	const group = save?.groups.find(g => g.id === groupId);
@@ -235,8 +256,7 @@ export function App() {
 					</div>
 				</div>}
 
-				<div className="card">
-					<h2>Outfit sources</h2>
+				<Fold title="Outfit sources">
 					<div className="row"><button onClick={() => setSources(new Set(outfits.map(o => o.source).filter(isGameSource)))}>All</button><button onClick={() => setSources(new Set())}>None</button>{access && <button onClick={() => setSources(defaultSources(access))}>Reachable</button>}</div>
 					<div className="list">
 						{sourceCounts.map(([name, c]) => (
@@ -250,15 +270,23 @@ export function App() {
 							</label>
 						))}
 					</div>
-				</div>
+				</Fold>
 
-				<div className="card">
-					<h2>Non-negotiables</h2>
-					<div className="list" style={{ maxHeight: "none" }}>
-						{CONSTRAINT_LABELS.map(([key, label]) => (
+				<Fold title="Non-negotiables">
+					<div className="list" style={{ maxHeight: "none", overflow: "visible" }}>
+						{CONSTRAINT_LABELS.map(([key, label, inverted, info]) => (
+							<label key={key}>
+								<input type="checkbox" checked={(constraints[key] as boolean) !== !!inverted} onChange={e => setConstraints(c => ({ ...c, [key]: e.target.checked !== !!inverted }))} />
+								<span>{label}</span>
+								{info && <Info text={info} />}
+							</label>
+						))}
+						<div className="muted">Must contain:</div>
+						{MUST_CONTAIN.map(([key, label, info]) => (
 							<label key={key}>
 								<input type="checkbox" checked={constraints[key] as boolean} onChange={e => setConstraints(c => ({ ...c, [key]: e.target.checked }))} />
 								<span>{label}</span>
+								<Info text={info} />
 							</label>
 						))}
 						{accessAttributes.map(attribute => (
@@ -269,17 +297,22 @@ export function App() {
 										...c,
 										requiredAttributes: e.target.checked ? [...c.requiredAttributes, attribute] : c.requiredAttributes.filter(a => a !== attribute),
 									}))} />
-								<span>Must have {attribute}</span>
+								<span>{attribute.charAt(0).toUpperCase() + attribute.slice(1)}</span>
+								<Info text={ATTRIBUTE_INFO} />
 							</label>
 						))}
-						{(["minFuel", "minCargo", "minBunks", "minTurnPercent", "budget"] as const).map(key => (
-							<label key={key}>
-								<span>{{ minFuel: "Min fuel capacity", minCargo: "Min cargo space", minBunks: "Min spare crew", minTurnPercent: "Min turning (% of current)", budget: "Credit budget (0 = no limit)" }[key]}</span>
-								<input type="number" min={0} value={constraints[key]} onChange={e => setConstraints(c => ({ ...c, [key]: Number(e.target.value) }))} />
-							</label>
-						))}
+						<details>
+							<summary>Advanced</summary>
+							{(["minFuel", "minCargo", "minBunks"] as const).map(key => (
+								<label key={key}>
+									<span>{{ minFuel: "Min fuel capacity", minCargo: "Min cargo space", minBunks: "Min spare crew" }[key]}</span>
+									<input type="number" min={0} value={constraints[key]} onChange={e => setConstraints(c => ({ ...c, [key]: Number(e.target.value) }))} />
+									<Info text={MINIMUM_INFO[key]} />
+								</label>
+							))}
+						</details>
 					</div>
-				</div>
+				</Fold>
 			</div>
 
 			<div className="col">
@@ -496,6 +529,15 @@ function Fold({ title, summary, children }: { title: string; summary?: string; c
 			<summary><h2>{title}</h2>{summary && <span className="fold-summary">{summary}</span>}</summary>
 			{children}
 		</details>
+	);
+}
+
+// An "i" icon whose popover shows on hover or keyboard focus. Clicking it must not toggle the checkbox it sits in.
+function Info({ text }: { text: string }) {
+	return (
+		<span className="info" tabIndex={0} aria-label={text} onClick={e => e.preventDefault()}>
+			ⓘ<span className="pop" role="tooltip">{text}</span>
+		</span>
 	);
 }
 

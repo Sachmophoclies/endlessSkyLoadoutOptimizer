@@ -177,11 +177,21 @@ export function loadGameData(dataDir: string): GameData {
 			planetSources[planet] = [...found].sort();
 	}
 
+	const finishedOutfits = finishOutfits(outfits, sets, setsWithConditions, planetSets);
+	const finishedShips = finishShips(ships);
+	// Plunderable: no outfitter sells it, but ships in the game carry it, so it can be taken from them.
+	const carried = new Set<string>();
+	for(const ship of finishedShips.values())
+		for(const name of Object.keys(ship.outfits))
+			carried.add(name);
+	for(const outfit of finishedOutfits.values())
+		outfit.plunderable = !outfit.sold && carried.has(outfit.name) && (outfit.attributes["installable"] ?? 0) >= 0;
+
 	return {
 		planetSources,
 		map: { systems, planetSets: Object.fromEntries(staticPlanetSets), requires: [...requires].sort() },
-		outfits: finishOutfits(outfits, sets, setsWithConditions, planetSets),
-		ships: finishShips(ships),
+		outfits: finishedOutfits,
+		ships: finishedShips,
 		outfitters: {
 			sets: Object.fromEntries([...sets].map(([name, items]) => [name, [...items]])),
 			reachable: [...sets.keys()].filter(name => setsWithConditions.has(name) || planetSets.has(name)),
@@ -318,6 +328,7 @@ function finishOutfits(
 			slot: (a["gun ports"] ?? 0) < 0 ? "gun" : (a["turret mounts"] ?? 0) < 0 ? "turret" : null,
 			weapon: outfit.weapon ? deriveWeapon(outfit.weapon, lookup) : null,
 			sold: reachable.has(name),
+			plunderable: false,
 		});
 	}
 	return result;
