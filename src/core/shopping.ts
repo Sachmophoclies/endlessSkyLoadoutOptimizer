@@ -1,3 +1,4 @@
+import { resaleValue } from "../save/depreciation.ts";
 import type { SaveData, ShipGroup } from "../save/parseSave.ts";
 import type { Genome, Problem } from "./model.ts";
 
@@ -56,6 +57,26 @@ export function shoppingList(
 				line.plunderShort = need;
 		}
 		lines.push(line);
+	}
+	return lines.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export interface ResaleLine {
+	name: string;
+	count: number; // copies freed across the group
+	value: number; // credits for selling them, after depreciation
+}
+
+// Outfits the new loadout takes off the group's ships, with what the game would pay for them (fleet depreciation).
+export function resaleList(problem: Problem, genome: Genome, group: ShipGroup, save: SaveData): ResaleLine[] {
+	const n = group.ships.length;
+	const lines: ResaleLine[] = [];
+	for(let i = 0; i < problem.pool.length; ++i)
+	{
+		const item = problem.pool[i];
+		const freed = ((group.outfits[item.name] ?? 0) - genome[i]) * n;
+		if(freed > 0)
+			lines.push({ name: item.name, count: freed, value: resaleValue(save.outfitAges[item.name], item.cost, freed, save.today) });
 	}
 	return lines.sort((a, b) => a.name.localeCompare(b.name));
 }

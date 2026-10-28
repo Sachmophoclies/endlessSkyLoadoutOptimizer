@@ -9,6 +9,7 @@ const map: MapData = {
 		Far: { pos: [100, 0], links: [], planets: ["Faraway", "Moon"] },
 	},
 	planetSets: { Earth: ["A"], Nearby: ["B"], Faraway: ["All"], Moon: ["B"] },
+	requires: [],
 };
 const sets = { A: ["w1"], B: ["w2"], All: ["w1", "w2", "w3", "w4", "w5"] };
 const buy = ["w1", "w2", "w3", "w4", "w5"].map(name => ({ name, count: 1, cost: 10 }));

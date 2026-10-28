@@ -138,5 +138,8 @@ export function unsatisfiable(problem: Problem): string[] {
 		out.push("Must have hyperdrive: no hyperdrive or scram drive is available to every ship in this group");
 	if(con.requireJumpDrive && !con.canStrip && !hasDrive("jump drive"))
 		out.push(`Must have jump drive: stripping other ships is off, and this group's ships, storage and cargo hold no jump drive to give each of its ${problem.shipCount} ships`);
+	for(const attribute of con.requiredAttributes)
+		if(!hasDrive(attribute))
+			out.push(`Must have ${attribute}: no outfit that provides it is available to every ship in this group`);
 	return out;
 }

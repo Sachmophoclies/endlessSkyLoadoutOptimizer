@@ -143,6 +143,9 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 		violation += 1;
 	if(con.requireJumpDrive && !(A("jump drive") > 0))
 		violation += 1;
+	for(const attribute of con.requiredAttributes)
+		if(!(A(attribute) > 0))
+			violation += 1;
 	if(con.minFuel > 0 && A("fuel capacity") < con.minFuel)
 		violation += (con.minFuel - A("fuel capacity")) / con.minFuel;
 	if(con.minCargo > 0 && A("cargo space") < con.minCargo)

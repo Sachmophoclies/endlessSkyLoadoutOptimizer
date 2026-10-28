@@ -1,5 +1,6 @@
 import { type DataNode, numberAt, parseData } from "../../data-prep/src/dataNode.ts";
 import type { Attributes } from "../core/model.ts";
+import { type AgeRecord, daysSinceEpoch } from "./depreciation.ts";
 
 export interface SaveShip {
 	model: string;
@@ -34,6 +35,9 @@ export interface SaveData {
 	cargo: Record<string, number>;
 	visitedPlanets: string[];
 	system: string; // where the pilot is now
+	today: number; // current game day, in the same units as the depreciation records
+	// Outfit name -> purchase day -> copies, from "fleet depreciation"; used for resale values.
+	outfitAges: Record<string, AgeRecord>;
 }
 
 const HULL_NON_ATTRIBUTES = new Set(["category", "cost", "mass", "licenses"]);
@@ -58,6 +62,8 @@ export function parseSave(text: string): SaveData {
 	let licenses: string[] = [];
 	const visitedPlanets: string[] = [];
 	let system = "";
+	let today = 0;
+	const outfitAges: Record<string, AgeRecord> = {};
 	let pilot = "";
 
 	for(const node of nodes)
@@ -104,6 +110,13 @@ export function parseSave(text: string): SaveData {
 		}
 		else if(key === "cargo")
 			cargo = readOutfits(child(node, "outfits"));
+		else if(key === "date" && node.tokens.length >= 4)
+			today = daysSinceEpoch(numberAt(node, 1), numberAt(node, 2), numberAt(node, 3));
+		else if(key === "fleet depreciation")
+		{
+			for(const record of node.children.filter(c => c.tokens[0] === "outfit" && c.tokens[1]))
+				outfitAges[record.tokens[1]] = record.children.map(c => [Number(c.tokens[0]), numberAt(c, 1)] as [number, number]);
+		}
 		else if(key === "system" && node.tokens[1])
 			system = node.tokens[1];
 		else if(key === "visited planet" && node.tokens[1])
@@ -112,7 +125,7 @@ export function parseSave(text: string): SaveData {
 			licenses = node.children.map(c => c.tokens[0]);
 	}
 
-	return { pilot, licenses, ships, groups: groupShips(ships), storage, storageByPlanet, cargo, visitedPlanets, system };
+	return { pilot, licenses, ships, groups: groupShips(ships), storage, storageByPlanet, cargo, visitedPlanets, system, today, outfitAges };
 }
 
 // Ships of the same model with identical hull attributes and identical outfits share a loadout.

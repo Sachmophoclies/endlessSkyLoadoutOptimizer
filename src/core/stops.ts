@@ -3,6 +3,7 @@
 export interface MapData {
 	systems: Record<string, { pos: [number, number]; links: string[]; planets: string[] }>;
 	planetSets: Record<string, string[]>; // planet -> outfitter set names
+	requires: string[]; // ship attributes some planets demand before landing
 }
 
 export interface Purchase {

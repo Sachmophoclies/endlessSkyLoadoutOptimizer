@@ -102,7 +102,8 @@ export interface GameData {
 	// sets added by events or missions are conditional and are left out.
 	planetSources: Record<string, string[]>;
 	// Star map for trip planning, and the outfitter sets written directly on each planet.
-	map: { systems: Record<string, MapSystem>; planetSets: Record<string, string[]> };
+	// `requires`: ship attributes that planets demand before a ship may land ("requires: <attribute>", Planet.cpp).
+	map: { systems: Record<string, MapSystem>; planetSets: Record<string, string[]>; requires: string[] };
 }
 
 function listFiles(dir: string): string[] {
@@ -126,6 +127,7 @@ export function loadGameData(dataDir: string): GameData {
 	const planetSets = new Set<string>();
 	const staticPlanetSets = new Map<string, string[]>();
 	const systems: Record<string, MapSystem> = {};
+	const requires = new Set<string>();
 
 	for(const file of listFiles(dataDir))
 	{
@@ -151,6 +153,7 @@ export function loadGameData(dataDir: string): GameData {
 			else if(key === "planet" || key === "event")
 			{
 				collectPlanetOutfitters(node, planetSets);
+				collectRequirements(node, requires);
 				if(key === "planet" && node.tokens.length >= 2)
 					for(const c of node.children)
 						if(c.tokens[0] === "outfitter" && c.tokens[1])
@@ -176,7 +179,7 @@ export function loadGameData(dataDir: string): GameData {
 
 	return {
 		planetSources,
-		map: { systems, planetSets: Object.fromEntries(staticPlanetSets) },
+		map: { systems, planetSets: Object.fromEntries(staticPlanetSets), requires: [...requires].sort() },
 		outfits: finishOutfits(outfits, sets, setsWithConditions, planetSets),
 		ships: finishShips(ships),
 		outfitters: {
@@ -400,4 +403,13 @@ function collectObjects(node: DataNode, out: string[]): void {
 	for(const child of node.children)
 		if(child.tokens[0] === "object")
 			collectObjects(child, out);
+}
+
+const REQUIRES_PREFIX = "requires: ";
+
+function collectRequirements(node: DataNode, out: Set<string>): void {
+	for(const token of node.tokens)
+		if(token.startsWith(REQUIRES_PREFIX))
+			out.add(token.slice(REQUIRES_PREFIX.length));
+	node.children.forEach(child => collectRequirements(child, out));
 }

@@ -6,7 +6,7 @@ import {
 } from "../core/model.ts";
 import { type Built, buildProblem, unsatisfiable } from "../core/problem.ts";
 import { defaultSources, isGameSource, sourceAccess } from "../core/sources.ts";
-import { shoppingList } from "../core/shopping.ts";
+import { resaleList, shoppingList } from "../core/shopping.ts";
 import { DEFAULT_JUMP_RANGE, planTrip } from "../core/route.ts";
 import { type MapData, planStops } from "../core/stops.ts";
 import { evaluate } from "../core/stats.ts";
@@ -35,7 +35,7 @@ function expandSimple(s: Simple): Weights {
 }
 
 const CONSTRAINT_LABELS: Array<[keyof Constraints, string]> = [
-	["instantaneousOnly", "Instantaneous weapons only (beams; anti-missile exempt)"],
+	["instantaneousOnly", "Instantaneous weapons only"],
 	["noAmmo", "No ammo weapons"],
 	["requireHyperdrive", "Must have hyperdrive"],
 	["requireJumpDrive", "Must have jump drive"],
@@ -99,6 +99,11 @@ export function App() {
 		if(access)
 			setSources(defaultSources(access));
 	}, [access]);
+
+	// Landing-permit attributes ("requires: <attribute>" on planets) that at least one outfit can provide.
+	const accessAttributes = useMemo(
+		() => (mapData?.requires ?? []).filter(a => outfits.some(o => (o.attributes[a] ?? 0) > 0)),
+		[mapData, outfits]);
 
 	const group = save?.groups.find(g => g.id === groupId);
 	const sourceCounts = useMemo(() => {
@@ -233,6 +238,16 @@ export function App() {
 								<span>{label}</span>
 							</label>
 						))}
+						{accessAttributes.map(attribute => (
+							<label key={attribute}>
+								<input type="checkbox" checked={constraints.requiredAttributes.includes(attribute)}
+									onChange={e => setConstraints(c => ({
+										...c,
+										requiredAttributes: e.target.checked ? [...c.requiredAttributes, attribute] : c.requiredAttributes.filter(a => a !== attribute),
+									}))} />
+								<span>Must have {attribute}</span>
+							</label>
+						))}
 						{(["minFuel", "minCargo", "minBunks", "minTurnPercent", "budget"] as const).map(key => (
 							<label key={key}>
 								<span>{{ minFuel: "Min fuel capacity", minCargo: "Min cargo space", minBunks: "Min spare crew", minTurnPercent: "Min turning (% of current)", budget: "Credit budget (0 = no limit)" }[key]}</span>
@@ -364,7 +379,10 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 		return [...trip.stops].sort((a, b) => rank(a.system) - rank(b.system));
 	}, [trip, route]);
 	const diff = problem.pool.map((p, i) => ({ name: p.name, from: built.baseline[i], to: pick.genome[i] })).filter(d => d.from !== d.to);
+	const resale = useMemo(() => resaleList(problem, pick.genome, group, save), [pick]);
 	const totalBuy = lines.reduce((s, l) => s + l.buyCost, 0);
+	const totalResale = resale.reduce((s, l) => s + l.value, 0);
+	const net = totalBuy - totalResale;
 
 	return (
 		<>
@@ -374,8 +392,10 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 					<thead><tr><th>Stat</th><th className="num">Current</th><th className="num">New</th><th className="num">Change</th></tr></thead>
 					<tbody>
 						{STAT_KEYS.map((k, i) => {
+							if(k === "cost")
+								return null;
 							const a = base.stats[i], b = pick.result.stats[i];
-							const better = k === "cost" ? b < a : b > a;
+							const better = b > a;
 							const pct = a ? ((b - a) / Math.abs(a)) * 100 : b ? 100 : 0;
 							return <tr key={k}><td>{STAT_LABELS[k]}</td><td className="num">{fmt(a)}</td><td className="num">{fmt(b)}</td>
 								<td className={`num ${Math.abs(pct) < 0.05 ? "" : better ? "up" : "down"}`}>{Math.abs(pct) < 0.05 ? "–" : `${pct > 0 ? "+" : ""}${pct.toFixed(0)}%`}</td></tr>;
@@ -390,7 +410,7 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 				</table>
 				{!diff.length && <div className="muted">Same as the current loadout.</div>}
 			</Fold>
-			<Fold title={`Shopping list (whole group ×${group.ships.length})`} summary={totalBuy > 0 ? `${totalBuy.toLocaleString()} credits` : "nothing to buy"}>
+			<Fold title={`Shopping list (whole group ×${group.ships.length})`} summary={totalBuy > 0 || totalResale > 0 ? `${net < 0 ? "+" : ""}${Math.abs(net).toLocaleString()} credits net` : "nothing to buy"}>
 				<table>
 					<thead><tr><th>Outfit</th><th className="num">Need</th><th>From</th></tr></thead>
 					<tbody>{lines.map(l => (
@@ -404,7 +424,16 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 					))}</tbody>
 				</table>
 				{!lines.length && <div className="muted">Nothing new is needed.</div>}
-				{totalBuy > 0 && <p>Total purchase: {totalBuy.toLocaleString()} credits</p>}
+				{resale.length > 0 && <>
+					<h3>Sell the outfits you remove</h3>
+					<table>
+						<thead><tr><th>Outfit</th><th className="num">Count</th><th className="num">Resale</th></tr></thead>
+						<tbody>{resale.map(r => <tr key={r.name}><td>{r.name}</td><td className="num">{r.count}</td><td className="num">{r.value.toLocaleString()} cr</td></tr>)}</tbody>
+					</table>
+				</>}
+				{(totalBuy > 0 || totalResale > 0) && <p>
+					Purchase {totalBuy.toLocaleString()} cr − resale {totalResale.toLocaleString()} cr = <strong>{net.toLocaleString()} credits net</strong>
+				</p>}
 			</Fold>
 			{trip && <div className="card">
 				<h2>Where to buy</h2>
