@@ -40,3 +40,16 @@ export function defaultSources(access: Map<string, SourceAccess>): Set<string> {
 			out.add(source);
 	return out;
 }
+
+// Outfits the player can get now: already held anywhere in the save, or sold by an outfitter on a visited planet.
+export function obtainableOutfits(
+	save: SaveData, planetSets: Record<string, string[]>, sets: Record<string, string[]>,
+): Set<string> {
+	const out = new Set<string>([...Object.keys(save.storage), ...Object.keys(save.cargo)]);
+	for(const ship of save.ships)
+		Object.keys(ship.outfits).forEach(name => out.add(name));
+	for(const planet of save.visitedPlanets)
+		for(const setName of planetSets[planet] ?? [])
+			(sets[setName] ?? []).forEach(name => out.add(name));
+	return out;
+}

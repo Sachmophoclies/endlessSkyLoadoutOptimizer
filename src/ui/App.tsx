@@ -5,7 +5,7 @@ import {
 	STAT_KEYS, STAT_LABELS, type StatKey, type Weights,
 } from "../core/model.ts";
 import { type Built, buildProblem, unsatisfiable } from "../core/problem.ts";
-import { defaultSources, isGameSource, sourceAccess } from "../core/sources.ts";
+import { defaultSources, isGameSource, obtainableOutfits, sourceAccess } from "../core/sources.ts";
 import { resaleList, shoppingList } from "../core/shopping.ts";
 import { DEFAULT_JUMP_RANGE, planTrip } from "../core/route.ts";
 import { type MapData, planStops } from "../core/stops.ts";
@@ -100,10 +100,23 @@ export function App() {
 			setSources(defaultSources(access));
 	}, [access]);
 
-	// Landing-permit attributes ("requires: <attribute>" on planets) that at least one outfit can provide.
+	// Landing-permit attributes ("requires: <attribute>" on planets) that at least one installable outfit provides.
+	// Mission-only outfits ("installable" -1, e.g. the Radiant Shield Shunt) do not count.
+	const providers = (attribute: string): OutfitData[] => outfits.filter(o => (o.attributes[attribute] ?? 0) > 0 && (o.attributes.installable ?? 0) >= 0);
 	const accessAttributes = useMemo(
-		() => (mapData?.requires ?? []).filter(a => outfits.some(o => (o.attributes[a] ?? 0) > 0)),
+		() => (mapData?.requires ?? []).filter(a => providers(a).length > 0),
 		[mapData, outfits]);
+	// With a save loaded, an access attribute is only selectable once an outfit providing it is held or sold on a visited planet.
+	const reachable = useMemo(() => {
+		if(!save || !mapData || !outfitSets)
+			return null;
+		const have = obtainableOutfits(save, mapData.planetSets, outfitSets);
+		return new Set(accessAttributes.filter(a => providers(a).some(o => have.has(o.name))));
+	}, [save, mapData, outfitSets, accessAttributes, outfits]);
+	useEffect(() => {
+		if(reachable)
+			setConstraints(c => c.requiredAttributes.every(a => reachable.has(a)) ? c : { ...c, requiredAttributes: c.requiredAttributes.filter(a => reachable.has(a)) });
+	}, [reachable]);
 
 	const group = save?.groups.find(g => g.id === groupId);
 	const sourceCounts = useMemo(() => {
@@ -239,8 +252,9 @@ export function App() {
 							</label>
 						))}
 						{accessAttributes.map(attribute => (
-							<label key={attribute}>
-								<input type="checkbox" checked={constraints.requiredAttributes.includes(attribute)}
+							<label key={attribute} className={reachable && !reachable.has(attribute) ? "disabled" : undefined}
+								title={reachable && !reachable.has(attribute) ? "Not reached yet" : undefined}>
+								<input type="checkbox" disabled={!!reachable && !reachable.has(attribute)} checked={constraints.requiredAttributes.includes(attribute)}
 									onChange={e => setConstraints(c => ({
 										...c,
 										requiredAttributes: e.target.checked ? [...c.requiredAttributes, attribute] : c.requiredAttributes.filter(a => a !== attribute),

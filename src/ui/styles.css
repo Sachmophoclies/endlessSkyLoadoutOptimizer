@@ -56,3 +56,4 @@ h3 { font-size: 14px; margin: 12px 0 4px; }
 .fold[open] > summary { margin-bottom: 8px; }
 .fold-summary { font-variant-numeric: tabular-nums; }
 button.copy { padding: 0 8px; font-size: 12px; margin-left: 4px; }
+label.disabled { color: var(--muted); cursor: not-allowed; }
