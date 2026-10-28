@@ -372,6 +372,14 @@ export function App() {
 							<span className="muted">{adv.batteryHorizon}</span></div>
 					</div>
 					</>}
+				</div>
+
+				<div className="card">
+					<div className="row">
+						<button className="primary" disabled={!group || running || !outfits.length} onClick={run}>{running ? "Running…" : "Find best loadout"}</button>
+						<button disabled={!running} onClick={() => { stop.current = true; }}>Stop</button>
+						{last && <span className="muted">gen {last.gen}/{ga.generations} · best {last.best.toFixed(3)} · feasible {(last.feasibleShare * 100).toFixed(0)}%</span>}
+					</div>
 					<details>
 						<summary>Search settings</summary>
 						<div className="row" style={{ flexWrap: "wrap" }}>
@@ -381,14 +389,6 @@ export function App() {
 							<label>Workers<input type="number" min={0} max={32} value={workers} onChange={e => setWorkers(Number(e.target.value))} /></label>
 						</div>
 					</details>
-				</div>
-
-				<div className="card">
-					<div className="row">
-						<button className="primary" disabled={!group || running || !outfits.length} onClick={run}>{running ? "Running…" : "Find best loadout"}</button>
-						<button disabled={!running} onClick={() => { stop.current = true; }}>Stop</button>
-						{last && <span className="muted">gen {last.gen}/{ga.generations} · best {last.best.toFixed(3)} · feasible {(last.feasibleShare * 100).toFixed(0)}%</span>}
-					</div>
 					<Chart history={history} />
 					<ProgressBar max={ga.generations} value={last ? last.gen : 0} done={!running && !!last} />
 					<div className="legend">
