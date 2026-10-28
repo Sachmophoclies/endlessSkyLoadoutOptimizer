@@ -1,0 +1,58 @@
+:root {
+	--bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #667085; --line: #d9dde5;
+	--accent: #2563eb; --good: #15803d; --bad: #b42318; --grid: #c9ced8;
+	--c-best: #15803d; --c-mean: #667085; --c-div: #c2410c;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #12151c; --panel: #1b202b; --text: #e6e9ef; --muted: #98a2b3; --line: #2e3646;
+		--accent: #6ea0ff; --good: #4ade80; --bad: #f97066; --grid: #3a4356;
+		--c-best: #4ade80; --c-mean: #98a2b3; --c-div: #fb923c;
+	}
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 14px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.app { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+@media (max-width: 860px) { .app { grid-template-columns: 1fr; } }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.muted { color: var(--muted); }
+.row { display: flex; align-items: center; gap: 8px; }
+.list { max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.slider { display: grid; grid-template-columns: 1fr 120px 28px; gap: 8px; align-items: center; }
+.slider input { width: 100%; }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+button:disabled { opacity: .5; cursor: default; }
+input[type=number] { width: 80px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+details > summary { cursor: pointer; font-weight: 600; margin-bottom: 6px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.up { color: var(--good); } .down { color: var(--bad); }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.tabs button[aria-pressed=true] { background: var(--accent); color: #fff; }
+.chart { width: 100%; height: auto; display: block; }
+.legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+.error { color: var(--bad); }
+/* The real file input sits invisibly over the face, so the click and the Tab/Enter keys reach the browser's native picker. */
+.filepick { position: relative; display: inline-block; }
+.filepick-face { display: inline-block; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); }
+.filepick input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
+.filepick:focus-within .filepick-face { outline: 2px solid var(--accent); outline-offset: 2px; }
+h3 { font-size: 14px; margin: 12px 0 4px; }
+/* 5px between the button row and the chart, and between the chart and the progress bar. */
+.card > .row + .chart { margin-top: 5px; }
+.bar { display: block; width: 100%; height: 8px; margin-top: 5px; accent-color: var(--accent); }
+/* Collapsed cards: title on the left, optional summary and a caret on the right. */
+.fold > summary { display: flex; align-items: center; gap: 12px; list-style: none; margin: 0; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary h2 { margin: 0; flex: 1; }
+.fold > summary::after { content: "▸"; color: var(--muted); transition: transform .15s; }
+.fold[open] > summary::after { transform: rotate(90deg); }
+.fold[open] > summary { margin-bottom: 8px; }
+.fold-summary { font-variant-numeric: tabular-nums; }
+button.copy { padding: 0 8px; font-size: 12px; margin-left: 4px; }

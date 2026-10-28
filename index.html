@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Endless Sky Loadout Optimizer</title>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// Classic script (runs even when module scripts are blocked, e.g. when index.html is opened via file://).
+setTimeout(function () {
+	var root = document.getElementById("root");
+	if (root && !root.children.length) {
+		root.innerHTML = '<p style="font:16px system-ui;padding:16px;color:#b42318">The app did not start. ' +
+			'Browsers block it when index.html is opened directly from disk (file://). ' +
+			'Run <code>npm run dev</code> (or <code>npm run preview</code>) and open the printed http://localhost URL, ' +
+			'or use the GitHub Pages address.</p>';
+	}
+}, 1500);
+</script>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

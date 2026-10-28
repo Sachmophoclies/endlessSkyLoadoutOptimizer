@@ -1,0 +1,7 @@
+node_modules
+dist
+*.tmp.ts
+.playwright-mcp
+*.tmp.cjs
+*.tmp.txt
+.claude
