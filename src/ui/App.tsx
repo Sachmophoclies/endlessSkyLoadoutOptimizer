@@ -342,7 +342,7 @@ export function App() {
 					<details>
 						<summary>Search settings</summary>
 						<div className="row" style={{ flexWrap: "wrap" }}>
-							{([["population", "Population"], ["generations", "Generations"], ["seed", "Seed"], ["stagnation", "Stop after idle"]] as const).map(([k, label]) => (
+							{([["population", "Population"], ["generations", "Generations"], ["stagnation", "Stop after idle"]] as const).map(([k, label]) => (
 								<label key={k}>{label}<input type="number" min={1} value={ga[k]} onChange={e => setGa(p => ({ ...p, [k]: Number(e.target.value) }))} /></label>
 							))}
 							<label>Workers<input type="number" min={0} max={32} value={workers} onChange={e => setWorkers(Number(e.target.value))} /></label>
@@ -411,7 +411,8 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 		};
 		return [...trip.stops].sort((a, b) => rank(a.system) - rank(b.system));
 	}, [trip, route]);
-	const diff = problem.pool.map((p, i) => ({ name: p.name, from: built.baseline[i], to: pick.genome[i] })).filter(d => d.from !== d.to);
+	const diff = problem.pool.map((p, i) => ({ name: p.name, from: built.baseline[i], to: pick.genome[i] })).filter(d => d.from !== d.to)
+		.sort((a, b) => Number(a.to > a.from) - Number(b.to > b.from) || a.name.localeCompare(b.name));
 	const resale = useMemo(() => resaleList(problem, pick.genome, group, save), [pick]);
 	const totalBuy = lines.reduce((s, l) => s + l.buyCost, 0);
 	const totalResale = resale.reduce((s, l) => s + l.value, 0);
