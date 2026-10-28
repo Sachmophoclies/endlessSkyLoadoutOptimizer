@@ -3,15 +3,16 @@ import type { Attributes, WeaponInfo } from "../../data-prep/src/types.ts";
 export type { Attributes, WeaponInfo };
 
 export const STAT_KEYS = [
-	"offence", "shieldHp", "hullHp", "shieldRegen", "hullRepair", "missileDefence",
+	"offence", "shieldRegen", "hullRepair", "shieldProtection", "hullProtection", "missileDefence",
 	"heatTolerance", "energyReserve", "turning", "thrust", "maxSpeed",
 	"spareCrew", "jumps", "fuelCapacity", "fuelRegen", "cargo", "cost",
 ] as const;
 export type StatKey = typeof STAT_KEYS[number];
 
 export const STAT_LABELS: Record<StatKey, string> = {
-	offence: "Offence (sustained dmg/s)", shieldHp: "Shield HP", hullHp: "Hull HP",
-	shieldRegen: "Shield regen /s", hullRepair: "Hull repair /s", missileDefence: "Missile defence",
+	offence: "Offence (sustained dmg/s)",
+		shieldRegen: "Shield regen /s", hullRepair: "Hull repair /s", missileDefence: "Missile defence",
+		shieldProtection: "Shield protection (x damage absorbed)", hullProtection: "Hull protection (x damage absorbed)",
 	heatTolerance: "Heat tolerance", energyReserve: "Energy reserve", turning: "Turning (deg/s)",
 	thrust: "Acceleration", maxSpeed: "Max speed", spareCrew: "Spare crew (boarding)",
 	jumps: "Jumps per tank", fuelCapacity: "Fuel capacity", fuelRegen: "Fuel regen /s (generators + ramscoop)", cargo: "Cargo space", cost: "Outfit cost (credits)",
@@ -20,7 +21,7 @@ export const STAT_LABELS: Record<StatKey, string> = {
 export type Weights = Record<StatKey, number>;
 
 export const DEFAULT_WEIGHTS: Weights = {
-	offence: 80, shieldHp: 50, hullHp: 50, shieldRegen: 20, hullRepair: 10, missileDefence: 20,
+	offence: 80, shieldRegen: 20, hullRepair: 10, shieldProtection: 10, hullProtection: 10, missileDefence: 20,
 	heatTolerance: 10, energyReserve: 10, turning: 30, thrust: 30, maxSpeed: 20,
 	spareCrew: 0, jumps: 10, fuelCapacity: 0, fuelRegen: 0, cargo: 0, cost: 10,
 };

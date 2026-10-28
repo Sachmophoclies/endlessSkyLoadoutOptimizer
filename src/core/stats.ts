@@ -4,6 +4,10 @@ import { type EvalResult, type Genome, type Problem, STAT_KEYS } from "./model.t
 // Rates: the game runs at 60 frames per second; per-frame attribute values are multiplied by FPS.
 const FPS = 60;
 const MAX_TEMPERATURE = 100;
+// Shield and hull points are the same unit whether they regenerate or are dealt as negative damage
+// (DamageProfile hands the negative amount to the shields as-is), so healing per second counts 1:1 as regeneration.
+const HEAL_TO_REGEN = 1;
+const MIN_PROTECTION = 0.01; // Outfit.cpp keeps shield and hull protection above -0.99
 const HEAT_LIMIT = 0.9; // sustainable if steady-state heat stays below this fraction of max heat
 
 const IDX = Object.fromEntries(STAT_KEYS.map((k, i) => [k, i])) as Record<(typeof STAT_KEYS)[number], number>;
@@ -37,6 +41,8 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 	let weaponEnergy = 0; // per second
 	let weaponHeat = 0; // per second
 	let missileDefence = 0;
+	let healShield = 0; // per second, from weapons whose net shield or hull damage is negative
+	let healHull = 0;
 	let cost = 0;
 	let minDriveFuel = Infinity;
 	for(let i = 0; i < pool.length; ++i)
@@ -63,7 +69,9 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 		if(w.tractorBeam > 0)
 			continue;
 		const d = w.damagePerSecond;
-		let value = ((d["shield"] ?? 0) + (d["hull"] ?? 0)) / 2
+		// Negative net damage heals the target (DamageProfile applies it as-is), so it counts as repair, not offence.
+		const shieldDamage = d["shield"] ?? 0, hullDamage = d["hull"] ?? 0;
+		let value = (Math.max(0, shieldDamage) + Math.max(0, hullDamage)) / 2
 			+ 100 * ((d["ion"] ?? 0) * adv.ion + (d["disruption"] ?? 0) * adv.disruption
 				+ (d["slowing"] ?? 0) * adv.slowing + (d["scrambling"] ?? 0) * adv.scrambling);
 		let fireShare = 1;
@@ -77,6 +85,8 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 		}
 		value *= c * fireShare;
 		dps += value;
+		healShield += c * fireShare * Math.max(0, -shieldDamage);
+		healHull += c * fireShare * Math.max(0, -hullDamage);
 		weaponEnergy += c * fireShare * (w.firingPerSecond["energy"] ?? 0);
 		weaponHeat += c * fireShare * (w.firingPerSecond["heat"] ?? 0);
 	}
@@ -108,12 +118,13 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 		violation += 1 - fHeat;
 
 	// Defence.
-	const shields = A("shields") * (1 + A("shield multiplier"));
-	const hull = A("hull") * (1 + A("hull multiplier"));
-	stats[IDX.shieldHp] = shields;
-	stats[IDX.hullHp] = hull;
-	stats[IDX.shieldRegen] = FPS * (A("shield generation") + A("delayed shield generation")) * (1 + A("shield generation multiplier"));
-	stats[IDX.hullRepair] = FPS * (A("hull repair rate") + A("delayed hull repair rate")) * (1 + A("hull repair multiplier"));
+	stats[IDX.shieldRegen] = FPS * (A("shield generation") + A("delayed shield generation")) * (1 + A("shield generation multiplier"))
+		+ HEAL_TO_REGEN * healShield * fire;
+	stats[IDX.hullRepair] = FPS * (A("hull repair rate") + A("delayed hull repair rate")) * (1 + A("hull repair multiplier"))
+		+ HEAL_TO_REGEN * healHull * fire;
+	// Incoming damage is divided by 1 + protection (Entity::Recalibrate), so this is the factor on effective HP.
+	stats[IDX.shieldProtection] = Math.max(MIN_PROTECTION, 1 + A("shield protection"));
+	stats[IDX.hullProtection] = Math.max(MIN_PROTECTION, 1 + A("hull protection"));
 	stats[IDX.missileDefence] = missileDefence;
 	stats[IDX.heatTolerance] = Math.max(0, heatBudget);
 	stats[IDX.energyReserve] = A("energy capacity") + Math.max(0, surplus) * 10;

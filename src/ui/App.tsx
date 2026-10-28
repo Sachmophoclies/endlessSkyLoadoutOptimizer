@@ -15,22 +15,31 @@ import { createPool } from "../ga/pool.ts";
 import { type SaveData, parseSave } from "../save/parseSave.ts";
 import { Chart } from "./Chart.tsx";
 import { ProgressBar } from "./ProgressBar.tsx";
-// Simple mode: three sliders that expand into the full weight vector. Advanced mode edits every weight directly.
-// The two modes are mutually exclusive: only the active one feeds the search.
-interface Simple { offence: number; defence: number; manoeuvre: number; logistics: number }
+// Simple mode picks an archetype, intermediate mode sets its four sliders, advanced mode edits every weight directly.
+// The modes are mutually exclusive: only the active one feeds the search.
+interface Simple { offence: number; defence: number; manoeuvre: number; logistics: number; crew?: number }
 
 const DEFAULT_SIMPLE: Simple = { offence: 70, defence: 60, manoeuvre: 40, logistics: 30 };
+const ARCHETYPES = {
+	Balanced: DEFAULT_SIMPLE,
+	Brawler: { offence: 100, defence: 50, manoeuvre: 30, logistics: 10 },
+	Tank: { offence: 50, defence: 100, manoeuvre: 20, logistics: 10 },
+	Skirmisher: { offence: 70, defence: 30, manoeuvre: 100, logistics: 20 },
+	Explorer: { offence: 30, defence: 40, manoeuvre: 50, logistics: 100 },
+	Boarder: { offence: 30, defence: 100, manoeuvre: 30, logistics: 10, crew: 100 },
+} satisfies Record<string, Simple>;
+type Archetype = keyof typeof ARCHETYPES;
 const ZERO: Weights = Object.fromEntries(STAT_KEYS.map(k => [k, 0])) as Weights;
 
 function expandSimple(s: Simple): Weights {
 	return {
 		...ZERO,
 		offence: s.offence,
-		shieldHp: s.defence * 0.35, hullHp: s.defence * 0.35, shieldRegen: s.defence * 0.1,
-		hullRepair: s.defence * 0.05, missileDefence: s.defence * 0.15,
+		shieldRegen: s.defence * 0.35, shieldProtection: s.defence * 0.1, hullProtection: s.defence * 0.1,
+		hullRepair: s.defence * 0.15, missileDefence: s.defence * 0.3,
 		turning: s.manoeuvre * 0.4, thrust: s.manoeuvre * 0.35, maxSpeed: s.manoeuvre * 0.25,
 		jumps: s.logistics * 0.35, fuelCapacity: s.logistics * 0.25, fuelRegen: s.logistics * 0.25, cargo: s.logistics * 0.15,
-		cost: 10,
+		spareCrew: s.crew ?? 0, cost: 10,
 	};
 }
 
@@ -55,7 +64,8 @@ export function App() {
 	const [fileName, setFileName] = useState("");
 	const [groupId, setGroupId] = useState("");
 	const [sources, setSources] = useState<Set<string>>(new Set());
-	const [mode, setMode] = useState<"simple" | "advanced">("simple");
+	const [mode, setMode] = useState<"simple" | "intermediate" | "advanced">("simple");
+	const [archetype, setArchetype] = useState<Archetype>("Balanced");
 	const [simple, setSimple] = useState<Simple>(DEFAULT_SIMPLE);
 	const [weights, setWeights] = useState<Weights>(DEFAULT_WEIGHTS);
 	const [constraints, setConstraints] = useState<Constraints>(DEFAULT_CONSTRAINTS);
@@ -158,8 +168,8 @@ export function App() {
 		setRunning(true);
 		setHistory([]);
 		setResult(null);
-		const activeWeights = mode === "simple" ? expandSimple(simple) : weights;
-		const activeAdv = mode === "simple" ? DEFAULT_ADVANCED : adv;
+		const activeWeights = mode === "advanced" ? weights : expandSimple(mode === "simple" ? ARCHETYPES[archetype] : simple);
+		const activeAdv = mode === "advanced" ? adv : DEFAULT_ADVANCED;
 		const built = buildProblem({ group, save, outfits, sources, weights: activeWeights, constraints, adv: activeAdv });
 		const blocked = unsatisfiable(built.problem);
 		if(blocked.length)
@@ -277,11 +287,17 @@ export function App() {
 					<h2>Weights</h2>
 					<div className="tabs">
 						<button aria-pressed={mode === "simple"} onClick={() => setMode("simple")}>Simple</button>
+						<button aria-pressed={mode === "intermediate"} onClick={() => setMode("intermediate")}>Intermediate</button>
 						<button aria-pressed={mode === "advanced"} onClick={() => setMode("advanced")}>Advanced</button>
 					</div>
 					<div className="muted">Only the selected mode is used by the search.</div>
-					{mode === "simple" ? <>
-						{([["offence", "Offence"], ["defence", "Defence (shields, hull, regen, anti-missile)"], ["manoeuvre", "Maneuverability (turning, thrust, speed)"], ["logistics", "Logistics (fuel capacity, fuel regen, jumps, cargo)"]] as const).map(([k, label]) => (
+					{mode === "simple" ? (Object.keys(ARCHETYPES) as Archetype[]).map(name => (
+						<label key={name}>
+							<input type="radio" name="archetype" checked={archetype === name} onChange={() => setArchetype(name)} />
+							<span>{name}</span>
+						</label>
+					)) : mode === "intermediate" ? <>
+						{([["offence", "Offence"], ["defence", "Defence (regen, protection, anti-missile)"], ["manoeuvre", "Maneuverability (turning, thrust, speed)"], ["logistics", "Logistics (fuel capacity, fuel regen, jumps, cargo)"]] as const).map(([k, label]) => (
 							<div className="slider" key={k}>
 								<span>{label}</span>
 								<input type="range" min={0} max={100} value={simple[k]} onChange={e => setSimple(s => ({ ...s, [k]: Number(e.target.value) }))} />
@@ -290,7 +306,10 @@ export function App() {
 						))}
 					</> : <>
 					<div className="tabs">
-						<button onClick={() => setWeights(DEFAULT_WEIGHTS)}>Reset</button>
+						{(Object.keys(ARCHETYPES) as Archetype[]).map(name => (
+							<button key={name} onClick={() => setWeights(expandSimple(ARCHETYPES[name]))}>{name}</button>
+						))}
+						<button onClick={() => setWeights(ZERO)}>Reset</button>
 					</div>
 					{STAT_KEYS.map(k => (
 						<div className="slider" key={k}>
