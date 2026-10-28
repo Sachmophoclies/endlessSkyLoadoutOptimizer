@@ -351,8 +351,8 @@ export function App() {
 							<span className="muted">{weights[k]}</span>
 						</div>
 					))}
-					<div>
-						<h2>Status damage and model options</h2>
+					<details className="fold" style={{ paddingTop: 12 }}>
+						<summary><h2>Status damage and model options</h2></summary>
 						<div className="muted">Status damage weights, applied to each channel's per-second value (game value x100) inside offence.</div>
 						{(["ion", "disruption", "slowing", "scrambling"] as const).map(k => (
 							<div className="slider" key={k}>
@@ -370,7 +370,7 @@ export function App() {
 						<div className="slider"><span>Battery covers deficit (s)</span>
 							<input type="range" min={5} max={120} step={5} value={adv.batteryHorizon} onChange={e => setAdv(a => ({ ...a, batteryHorizon: Number(e.target.value) }))} />
 							<span className="muted">{adv.batteryHorizon}</span></div>
-					</div>
+					</details>
 					</>}
 				</div>
 
