@@ -64,11 +64,11 @@ const CONSTRAINT_LABELS: Array<[keyof Constraints, string, boolean?, string?]> =
 	["ignoreLicenses", "Ignore licenses", false,
 		"Outfits that need a license you do not hold are normally left out. Ticked: they are allowed anyway."],
 ];
-const MUST_CONTAIN: Array<[keyof Constraints, string, string]> = [
-	["requireHyperdrive", "Hyperdrive", "Every ship must carry a hyperdrive (or a scram drive) so it can travel between linked systems."],
-	["requireJumpDrive", "Jump drive", "Every ship must carry a jump drive, which can also reach systems that are not linked by hyperlane. If you also turn off plunderable outfits and no jump drive is available, the search reports an error."],
+const MUST_CONTAIN: Array<[keyof Constraints, string, string?]> = [
+	["requireHyperdrive", "Hyperdrive"],
+	["requireJumpDrive", "Jump drive", "Every ship must carry a jump drive, which can also reach systems that are not linked by hyperlane."],
 ];
-const ATTRIBUTE_INFO = "Some planets only let you land if the ship carries this. Greyed out until your save has reached an outfit that provides it.";
+const ATTRIBUTE_INFO = "Some planets are only reachable if this outfit is equipped. If you do not own this outfit and have not reached a planet that sells it, the option is disabled.";
 const MINIMUM_INFO = {
 	minFuel: "Rejects loadouts whose fuel capacity is below this.",
 	minCargo: "Rejects loadouts whose cargo space is below this.",
@@ -286,7 +286,7 @@ export function App() {
 							<label key={key}>
 								<input type="checkbox" checked={constraints[key] as boolean} onChange={e => setConstraints(c => ({ ...c, [key]: e.target.checked }))} />
 								<span>{label}</span>
-								<Info text={info} />
+								{info && <Info text={info} />}
 							</label>
 						))}
 						{accessAttributes.map(attribute => (
