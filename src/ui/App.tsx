@@ -82,6 +82,7 @@ const CONSTRAINT_LABELS: Array<[keyof Constraints, string, boolean?, string?]> =
 const MUST_CONTAIN: Array<[keyof Constraints, string, string?]> = [
 	["requireHyperdrive", "Hyperdrive"],
 	["requireJumpDrive", "Jump drive", "Every ship must carry a jump drive, which can also reach systems that are not linked by hyperlane."],
+	["requireRamscoop", "Ramscoop"],
 ];
 const ATTRIBUTE_INFO = "Some planets are only reachable if this outfit is equipped. If you do not own this outfit and have not reached a planet that sells it, the option is disabled.";
 const MINIMUM_INFO = {

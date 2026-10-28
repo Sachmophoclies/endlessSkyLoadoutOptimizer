@@ -31,6 +31,7 @@ export interface Constraints {
 	noAmmo: boolean;
 	requireHyperdrive: boolean;
 	requireJumpDrive: boolean;
+	requireRamscoop: boolean;
 	positiveEnergy: boolean;
 	heatSustainable: boolean;
 	ownedLimits: boolean;
@@ -44,7 +45,7 @@ export interface Constraints {
 }
 
 export const DEFAULT_CONSTRAINTS: Constraints = {
-	instantaneousOnly: true, noAmmo: true, requireHyperdrive: true, requireJumpDrive: true,
+	instantaneousOnly: true, noAmmo: true, requireHyperdrive: true, requireJumpDrive: true, requireRamscoop: true,
 	positiveEnergy: true, heatSustainable: true, ownedLimits: false, ignoreLicenses: false,
 	plunder: true, minFuel: 0, minCargo: 0, minBunks: 0,
 	requiredAttributes: [],

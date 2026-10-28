@@ -188,6 +188,8 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 		violation += 1;
 	if(con.requireJumpDrive && !(A("jump drive") > 0))
 		violation += 1;
+	if(con.requireRamscoop && !(A("ramscoop") > 0))
+		violation += 1;
 	for(const attribute of con.requiredAttributes)
 		if(!(A(attribute) > 0))
 			violation += 1;
