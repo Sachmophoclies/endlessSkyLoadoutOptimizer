@@ -60,3 +60,6 @@ label.disabled { color: var(--muted); cursor: not-allowed; }
 .info { position: relative; margin-left: auto; color: var(--muted); cursor: help; outline: none; }
 .info .pop { display: none; position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%); width: 260px; max-width: 80vw; z-index: 10; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); box-shadow: 0 4px 14px #0003; font-size: 13px; cursor: default; }
 .info:hover .pop, .info:focus .pop { display: block; }
+.slide { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .5s ease, margin-bottom .5s ease; }
+.slide.open { grid-template-rows: 1fr; margin-bottom: 8px; }
+.slide > * { overflow: hidden; min-height: 0; margin-bottom: 0; }

@@ -31,6 +31,21 @@ const ARCHETYPES = {
 type Archetype = keyof typeof ARCHETYPES;
 const ZERO: Weights = Object.fromEntries(STAT_KEYS.map(k => [k, 0])) as Weights;
 
+// Bulk Trader, an Advanced-only archetype: cargo first, then one of four ways to spend the rest of the ship.
+const BULK_TRADER = {
+	"Nimble": { cargo: 70, turning: 40, thrust: 40, maxSpeed: 30, offence: 10, shieldRegen: 10, jumps: 20, fuelCapacity: 10 },
+	"Balanced": {
+		cargo: 70, offence: 30, shieldRegen: 25, hullRepair: 10, shieldProtection: 10, hullProtection: 10, missileDefence: 20,
+		turning: 20, thrust: 20, maxSpeed: 15, jumps: 25, fuelCapacity: 10,
+	},
+	"Tank": {
+		cargo: 70, offence: 20, shieldRegen: 50, hullRepair: 30, shieldProtection: 25, hullProtection: 25, missileDefence: 30,
+		jumps: 20, fuelCapacity: 10,
+	},
+	"Max carry": { cargo: 100, shieldRegen: 5, jumps: 20, fuelCapacity: 20 },
+} satisfies Record<string, Partial<Weights>>;
+type Trader = keyof typeof BULK_TRADER;
+
 function expandSimple(s: Simple): Weights {
 	return {
 		...ZERO,
@@ -86,6 +101,7 @@ export function App() {
 	const [sources, setSources] = useState<Set<string>>(new Set());
 	const [mode, setMode] = useState<"simple" | "intermediate" | "advanced">("simple");
 	const [archetype, setArchetype] = useState<Archetype>("Balanced");
+	const [trader, setTrader] = useState<Trader | null>(null); // the Bulk Trader variant in Advanced; null while that row is closed
 	const [simple, setSimple] = useState<Simple>(DEFAULT_SIMPLE);
 	const [weights, setWeights] = useState<Weights>(DEFAULT_WEIGHTS);
 	const [constraints, setConstraints] = useState<Constraints>(DEFAULT_CONSTRAINTS);
@@ -323,7 +339,6 @@ export function App() {
 						<button aria-pressed={mode === "intermediate"} onClick={() => setMode("intermediate")}>Intermediate</button>
 						<button aria-pressed={mode === "advanced"} onClick={() => setMode("advanced")}>Advanced</button>
 					</div>
-					<div className="muted">Only the selected mode is used by the search.</div>
 					{mode === "simple" ? (Object.keys(ARCHETYPES) as Archetype[]).map(name => (
 						<label key={name}>
 							<input type="radio" name="archetype" checked={archetype === name} onChange={() => setArchetype(name)} />
@@ -340,9 +355,18 @@ export function App() {
 					</> : <>
 					<div className="tabs">
 						{(Object.keys(ARCHETYPES) as Archetype[]).map(name => (
-							<button key={name} onClick={() => setWeights(expandSimple(ARCHETYPES[name]))}>{name}</button>
+							<button key={name} onClick={() => { setTrader(null); setWeights(expandSimple(ARCHETYPES[name])); }}>{name}</button>
 						))}
-						<button onClick={() => setWeights(ZERO)}>Reset</button>
+						<button aria-pressed={trader !== null} onClick={() => { setTrader("Balanced"); setWeights({ ...ZERO, cost: 10, ...BULK_TRADER.Balanced }); }}>Bulk Trader</button>
+						<button onClick={() => { setTrader(null); setWeights(ZERO); }}>Reset</button>
+					</div>
+					<div className={`slide${trader ? " open" : ""}`}>
+						<div className="tabs">
+							{(Object.keys(BULK_TRADER) as Trader[]).map(name => (
+								<button key={name} aria-pressed={trader === name} tabIndex={trader ? 0 : -1}
+									onClick={() => { setTrader(name); setWeights({ ...ZERO, cost: 10, ...BULK_TRADER[name] }); }}>{name}</button>
+							))}
+						</div>
 					</div>
 					{STAT_KEYS.map(k => (
 						<div className="slider" key={k}>

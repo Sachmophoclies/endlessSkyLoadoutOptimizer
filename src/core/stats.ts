@@ -112,8 +112,6 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 	stats[IDX.offence] = dps * fire;
 	if(con.positiveEnergy && fEnergy < 1 && weaponEnergy > 0)
 		violation += 1 - fEnergy;
-	if(con.positiveEnergy && surplus < 0 && weaponEnergy === 0)
-		violation += 0.5;
 	if(con.heatSustainable && fHeat < 1)
 		violation += 1 - fHeat;
 
@@ -137,6 +135,42 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 	stats[IDX.turning] = A("turn") / inertial * (1 + A("turn multiplier")) * FPS;
 	stats[IDX.thrust] = thrust / inertial * (1 + A("acceleration multiplier")) * FPS * FPS;
 	stats[IDX.maxSpeed] = (thrust + (A("thrust") ? A("afterburner thrust") : 0)) / drag * FPS;
+
+	// Ship::FlightCheck: the errors that stop takeoff and the warnings the outfitter shows. A loadout that trips any of
+	// them is rejected whatever the weights and the "ignore ... when firing" options say.
+	const idleEnergy = A("energy generation") - A("energy consumption") + A("fuel energy") + A("solar collection");
+	const totalEnergy = idleEnergy + A("energy capacity");
+	const thrustEnergy = A("thrusting energy"), turnEnergy = A("turning energy");
+	const idleProduction = Math.max(0, A("heat generation") - eff * A("cooling")); // Ship::IdleHeat, per frame
+	const fuelBalance = A("fuel capacity") + A("fuel generation") - A("fuel consumption");
+	if(!A("thrust")) // no thruster; afterburner-only and reverse-only are warnings
+		violation += 1;
+	if(!A("turn")) // no steering
+		violation += 1;
+	if(idleProduction >= maxHeat * dissipation) // overheating
+		violation += 1;
+	if(totalEnergy <= 0) // no energy
+		violation += 1;
+	if(totalEnergy - A("fuel energy") <= 0 && fuelBalance <= 0) // no fuel
+		violation += 1;
+	if(idleEnergy <= 0) // battery only
+		violation += 0.5;
+	if(totalEnergy < thrustEnergy || totalEnergy < turnEnergy || totalEnergy < thrustEnergy + turnEnergy) // limited thrust, turn or movement
+		violation += 0.5;
+	if(totalEnergy - 0.8 * A("solar collection") < 0.2 * (thrustEnergy + turnEnergy)) // solar power
+		violation += 0.5;
+	if(idleProduction <= 0 && (A("thrusting heat") < 0 || A("turning heat") < 0)) // insufficient heat
+		violation += 0.5;
+	if(fuelBalance < 0) // fuel
+		violation += 0.5;
+	if(minDriveFuel < Infinity && A("fuel capacity") < minDriveFuel) // not enough fuel for one jump
+		violation += 0.5;
+	for(let i = 0; i < pool.length; ++i)
+		if(g[i] && (pool[i].weapon?.firing["energy"] ?? 0) > totalEnergy) // insufficient energy to fire
+		{
+			violation += 0.5;
+			break;
+		}
 
 	// Crew, fuel, cargo, cost.
 	const automaton = A("automaton") > 0;
