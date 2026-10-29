@@ -114,6 +114,8 @@ export function App() {
 	const [history, setHistory] = useState<Progress[]>([]);
 	const [result, setResult] = useState<{ built: Built; outcome: GAOutcome; groupId: string; sources: string[] } | null>(null);
 	const [loaded, setLoaded] = useState("");
+	const [keepId, setKeepId] = useState("");
+	const [convertId, setConvertId] = useState("");
 	const [baseMap, setMapData] = useState<MapData | null>(null);
 	const [outfitSets, setOutfitSets] = useState<Record<string, string[]> | null>(null);
 	const mapData = useMemo(() => (baseMap && save ? applyEvents(baseMap, save.events) : baseMap), [baseMap, save]);
@@ -189,6 +191,8 @@ export function App() {
 			setSave(data);
 			setFileName(file.name);
 			setGroupId(data.groups[0].id);
+			setKeepId("");
+			setConvertId("");
 			setResult(null);
 			setError("");
 		} catch(e) {
@@ -299,6 +303,37 @@ export function App() {
 		}
 	}
 
+	// Shows what turning one group into another group's loadout takes, using the same result view as a search.
+	function consolidate() {
+		const keep = save?.groups.find(g => g.id === keepId), target = save?.groups.find(g => g.id === convertId);
+		if(!save || !keep || !target)
+			return;
+		const allSources = outfits.map(o => o.source).filter(isGameSource);
+		const built = buildProblem({
+			group: target, save, outfits, sources: new Set(allSources),
+			weights: mode === "advanced" ? weights : expandSimple(mode === "simple" ? ARCHETYPES[archetype] : simple),
+			constraints: { ...DEFAULT_CONSTRAINTS, instantaneousOnly: false, noAmmo: false, ignoreLicenses: true, plunder: true, ownedLimits: false },
+			adv: mode === "advanced" ? adv : DEFAULT_ADVANCED,
+		});
+		built.problem.constraints = constraints;
+		const genome = new Int16Array(built.problem.pool.length);
+		let missing = 0;
+		for(const [name, count] of Object.entries(keep.outfits))
+		{
+			const i = built.problem.pool.findIndex(p => p.name === name);
+			if(i < 0)
+				missing += count;
+			else
+				genome[i] = count;
+		}
+		const best = { genome, result: evaluate(built.problem, genome), fitness: 0 };
+		setGroupId(target.id);
+		setHistory([]);
+		setResult({ built, outcome: { best, top: [best], generations: 0 }, groupId: target.id, sources: allSources });
+		setLoaded(`Converting ${target.model} ×${target.ships.length} to the ${keep.model} ×${keep.ships.length} loadout${missing ? ` (${missing} outfits unavailable)` : ""}`);
+		setError("");
+	}
+
 	const setWeight = (k: StatKey, v: number) => setWeights(w => ({ ...w, [k]: v }));
 	const last = history[history.length - 1];
 
@@ -329,6 +364,25 @@ export function App() {
 								<span>{g.model} ×{g.ships.length} <span className="muted">({g.ships[0].name}{g.ships.length > 1 ? ", …" : ""}; {Object.values(g.outfits).reduce((a, b) => a + b, 0)} outfits)</span></span>
 							</label>
 						))}
+					</div>
+				</div>}
+
+				{save && save.groups.some(g => save.groups.some(o => o !== g && o.model === g.model)) && <div className="card">
+					<h2>Consolidate</h2>
+					<div className="row" style={{ flexWrap: "wrap" }}>
+						<label>Keep
+							<select value={keepId} onChange={e => { setKeepId(e.target.value); setConvertId(""); }}>
+								<option value="" />
+								{save.groups.filter(g => save.groups.some(o => o !== g && o.model === g.model)).map(g => <option key={g.id} value={g.id}>{g.model} ×{g.ships.length}</option>)}
+							</select>
+						</label>
+						<label>Convert
+							<select value={convertId} onChange={e => setConvertId(e.target.value)} disabled={!keepId}>
+								<option value="" />
+								{save.groups.filter(g => g.id !== keepId && g.model === save.groups.find(k => k.id === keepId)?.model).map(g => <option key={g.id} value={g.id}>{g.model} ×{g.ships.length}</option>)}
+							</select>
+						</label>
+						<button disabled={!keepId || !convertId || running || !outfits.length} onClick={consolidate}>Show changes</button>
 					</div>
 				</div>}
 

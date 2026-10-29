@@ -28,6 +28,7 @@ button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid
 button.primary { background: var(--accent); color: #fff; border-color: transparent; }
 button:disabled { opacity: .5; cursor: default; }
 input[type=number] { width: 80px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+select { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
 details > summary { cursor: pointer; font-weight: 600; margin-bottom: 6px; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
