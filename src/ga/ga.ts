@@ -8,9 +8,10 @@ export interface GAParams {
 	seed: number;
 	topN: number;
 	stagnation: number; // stop after this many generations without improvement
+	runs: number; // independent searches with different seeds; the best result is kept
 }
 
-export const DEFAULT_GA: GAParams = { population: 500, generations: 300, mutationRate: 2, seed: 1, topN: 1, stagnation: 80 };
+export const DEFAULT_GA: GAParams = { population: 500, generations: 300, mutationRate: 2, seed: 1, topN: 1, stagnation: 80, runs: 4 };
 
 // Scores a batch of genomes. Implemented by the worker pool (or in-thread for tests).
 export type Evaluator = (genomes: Genome[]) => Promise<EvalResult[]>;
@@ -49,7 +50,7 @@ export function mulberry32(seed: number): () => number {
 // Maps raw stats to fitness. Each stat is scored against the group's current loadout (capped at 1.5x),
 // so one huge stat cannot swamp the rest. Stats the current loadout lacks (reference 0) fall back to the
 // running maximum seen so far. Workers return raw stats; normalisation happens here.
-class Scorer {
+export class Scorer {
 	readonly hi = new Float64Array(STAT_KEYS.length).fill(1e-9);
 	private ref: Float64Array | null = null;
 	private problem: Problem;
@@ -333,4 +334,107 @@ function diversity(pop: Individual[], rand: () => number): number {
 	for(let s = 0; s < samples; ++s)
 		sum += distance(pop[Math.floor(rand() * pop.length)].genome, pop[Math.floor(rand() * pop.length)].genome);
 	return sum / samples;
+}
+
+const HILL_ROUNDS = 40;
+
+// Several independent GA runs (seeds seed, seed + 7919, ...) share one evaluator and run side by side. Their winners are
+// compared under one scorer, and the best is then polished by hill climbing.
+export async function runSearch(
+	problem: Problem, baseline: Genome, ownedPerShip: number[], params: GAParams,
+	evaluate: Evaluator, onProgress: (p: Progress) => void, shouldStop: () => boolean,
+): Promise<GAOutcome> {
+	const runs = Math.max(1, Math.floor(params.runs));
+	const latest: Progress[] = [];
+	const finished: boolean[] = new Array(runs).fill(false);
+	const report = (): void => {
+		const ps = latest.filter(Boolean);
+		const avg = (f: (p: Progress) => number): number => ps.reduce((s, p) => s + f(p), 0) / ps.length;
+		let gens = 0;
+		for(let k = 0; k < runs; ++k)
+			gens += finished[k] ? params.generations : latest[k]?.gen ?? 0;
+		onProgress({
+			gen: Math.round(gens / runs), best: Math.max(...ps.map(p => p.best)), mean: avg(p => p.mean),
+			diversity: avg(p => p.diversity), feasibleShare: avg(p => p.feasibleShare),
+		});
+	};
+	const outcomes = await Promise.all(Array.from({ length: runs }, (_, k) =>
+		runGA(problem, baseline, ownedPerShip, { ...params, seed: params.seed + k * 7919 }, evaluate,
+			p => { latest[k] = p; report(); }, shouldStop).finally(() => { finished[k] = true; })));
+
+	// One scorer for everyone, referenced to the current loadout, so the runs' winners are comparable.
+	const scorer = new Scorer(problem);
+	scorer.setReference((await evaluate([baseline]))[0]);
+	const finalists = outcomes.map(o => o.best);
+	scorer.observe(finalists.map(f => f.result));
+	for(const f of finalists)
+		f.fitness = scorer.fitness(f.result);
+	finalists.sort((a, b) => b.fitness - a.fitness);
+	const best = shouldStop() ? finalists[0] : await hillClimb(problem, ownedPerShip, finalists[0], scorer, evaluate, shouldStop);
+	return { best, top: [best], generations: Math.max(...outcomes.map(o => o.generations)) };
+}
+
+// Steepest-ascent local search: every single add, remove and swap that keeps the capacities legal is scored, and the best
+// improvement is taken until none is left.
+async function hillClimb(
+	problem: Problem, ownedPerShip: number[], start: Individual, scorer: Scorer, evaluate: Evaluator, shouldStop: () => boolean,
+): Promise<Individual> {
+	const pool = problem.pool;
+	const maxOf = pool.map((p, i) => Math.min(p.max, ownedPerShip[i] ?? p.max));
+	const usable = maxOf.map((m, i) => (m > 0 ? i : -1)).filter(i => i >= 0);
+	const legal = (g: Genome): boolean => {
+		for(const i of usable)
+			if(g[i] > maxOf[i])
+				return false;
+		for(let k = 0; k < problem.capKeys.length; ++k)
+			if(problem.hullCap[k] + capSum(problem, g, k) < 0)
+				return false;
+		return true;
+	};
+	let current = start;
+	for(let round = 0; round < HILL_ROUNDS && !shouldStop(); ++round)
+	{
+		const present = usable.filter(i => current.genome[i] > 0);
+		const neighbours: Genome[] = [];
+		const consider = (g: Genome): void => {
+			if(legal(g))
+				neighbours.push(g);
+		};
+		for(const i of usable)
+		{
+			const added = Int16Array.from(current.genome);
+			added[i]++;
+			consider(added);
+		}
+		for(const o of present)
+		{
+			const removed = Int16Array.from(current.genome);
+			removed[o]--;
+			consider(removed);
+			for(const i of usable)
+			{
+				if(i === o)
+					continue;
+				const swapped = Int16Array.from(removed);
+				swapped[i]++;
+				consider(swapped);
+			}
+		}
+		if(!neighbours.length)
+			break;
+		const results = await evaluate(neighbours);
+		let pick = -1, pickFit = current.fitness + 1e-9;
+		results.forEach((r, k) => {
+			const f = scorer.fitness(r);
+			if(r.violation === 0 && f > pickFit)
+			{
+				pickFit = f;
+				pick = k;
+			}
+		});
+		if(pick < 0)
+			break;
+		current = { genome: neighbours[pick], result: results[pick], fitness: pickFit };
+	}
+	return current;
 }

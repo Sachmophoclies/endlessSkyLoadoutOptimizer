@@ -37,6 +37,7 @@ export interface Constraints {
 	ownedLimits: boolean;
 	ignoreLicenses: boolean;
 	plunder: boolean;
+	includeShrouded: boolean;
 	minFuel: number;
 	minCargo: number;
 	minBunks: number;
@@ -47,7 +48,7 @@ export interface Constraints {
 export const DEFAULT_CONSTRAINTS: Constraints = {
 	instantaneousOnly: true, noAmmo: true, requireHyperdrive: true, requireJumpDrive: true, requireRamscoop: true,
 	positiveEnergy: true, heatSustainable: true, ownedLimits: false, ignoreLicenses: false,
-	plunder: true, minFuel: 0, minCargo: 0, minBunks: 0,
+	plunder: true, includeShrouded: true, minFuel: 0, minCargo: 0, minBunks: 0,
 	requiredAttributes: [],
 };
 

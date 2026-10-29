@@ -13,14 +13,23 @@ export interface SourceAccess {
 }
 
 // What the player has actually reached: planets in the save's "visited planet" list that sell the source's outfits
-// (planetSources comes from `outfitter` lines on planets in the game data), and outfits already held.
-export function sourceAccess(save: SaveData, outfits: OutfitData[], planetSources: Record<string, string[]>): Map<string, SourceAccess> {
+// (planetSets, with the save's fired events applied, maps planets to outfitter sets), and outfits already held.
+export function sourceAccess(
+	save: SaveData, outfits: OutfitData[], planetSets: Record<string, string[]>, sets: Record<string, string[]>,
+): Map<string, SourceAccess> {
 	const result = new Map<string, SourceAccess>();
 	const entry = (s: string): SourceAccess => result.get(s) ?? result.set(s, { visitedSellers: 0, owned: false }).get(s)!;
-	for(const planet of new Set(save.visitedPlanets))
-		for(const source of planetSources[planet] ?? [])
-			++entry(source).visitedSellers;
 	const sourceOf = new Map(outfits.map(o => [o.name, o.source]));
+	for(const planet of new Set(save.visitedPlanets))
+	{
+		const here = new Set<string>();
+		for(const setName of planetSets[planet] ?? [])
+			for(const item of sets[setName] ?? [])
+				if(sourceOf.has(item))
+					here.add(sourceOf.get(item)!);
+		for(const source of here)
+			++entry(source).visitedSellers;
+	}
 	const held = new Set<string>([...Object.keys(save.storage), ...Object.keys(save.cargo)]);
 	for(const ship of save.ships)
 		Object.keys(ship.outfits).forEach(name => held.add(name));

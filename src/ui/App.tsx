@@ -8,9 +8,9 @@ import { type Built, buildProblem, unsatisfiable } from "../core/problem.ts";
 import { defaultSources, isGameSource, obtainableOutfits, sourceAccess } from "../core/sources.ts";
 import { resaleList, shoppingList } from "../core/shopping.ts";
 import { DEFAULT_JUMP_RANGE, planTrip } from "../core/route.ts";
-import { type MapData, landablePlanets, planStops } from "../core/stops.ts";
+import { type MapData, applyEvents, landablePlanets, pathFromVisible, planStops, unshroudedPlanets } from "../core/stops.ts";
 import { evaluate } from "../core/stats.ts";
-import { DEFAULT_GA, type GAOutcome, type GAParams, type Progress, runGA } from "../ga/ga.ts";
+import { DEFAULT_GA, type GAOutcome, type GAParams, type Progress, runSearch } from "../ga/ga.ts";
 import { createPool } from "../ga/pool.ts";
 import { type SaveData, parseSave } from "../save/parseSave.ts";
 import { Chart } from "./Chart.tsx";
@@ -78,6 +78,7 @@ const CONSTRAINT_LABELS: Array<[keyof Constraints, string, boolean?, string?]> =
 		"Uses only the copies you already own, so there is nothing to buy. Off: any outfit sold by the selected sources can be bought in any number."],
 	["ignoreLicenses", "Ignore licenses", false,
 		"Outfits that need a license you do not hold are normally left out. Ticked: they are allowed anyway."],
+	["includeShrouded", "Include shrouded outfitters"],
 ];
 const MUST_CONTAIN: Array<[keyof Constraints, string, string?]> = [
 	["requireHyperdrive", "Hyperdrive"],
@@ -111,10 +112,11 @@ export function App() {
 	const [workers, setWorkers] = useState(Math.max(1, Math.min(8, (navigator.hardwareConcurrency ?? 4) - 1)));
 	const [running, setRunning] = useState(false);
 	const [history, setHistory] = useState<Progress[]>([]);
-	const [result, setResult] = useState<{ built: Built; outcome: GAOutcome; groupId: string } | null>(null);
-	const [mapData, setMapData] = useState<MapData | null>(null);
+	const [result, setResult] = useState<{ built: Built; outcome: GAOutcome; groupId: string; sources: string[] } | null>(null);
+	const [loaded, setLoaded] = useState("");
+	const [baseMap, setMapData] = useState<MapData | null>(null);
 	const [outfitSets, setOutfitSets] = useState<Record<string, string[]> | null>(null);
-	const [planetSources, setPlanetSources] = useState<Record<string, string[]> | null>(null);
+	const mapData = useMemo(() => (baseMap && save ? applyEvents(baseMap, save.events) : baseMap), [baseMap, save]);
 	const stop = useRef(false);
 	useEffect(() => {
 		const load = <T,>(file: string, set: (value: T) => void): void => {
@@ -127,10 +129,6 @@ export function App() {
 		load<{ sets: Record<string, string[]> }>("outfitters.json", o => setOutfitSets(o.sets));
 	}, []);
 	useEffect(() => {
-		fetch(`${import.meta.env.BASE_URL}data/planets.json`)
-			.then(r => r.json() as Promise<Record<string, string[]>>)
-			.then(setPlanetSources)
-			.catch(e => setError(`Could not load game data: ${e}`));
 		fetch(`${import.meta.env.BASE_URL}data/outfits.json`)
 			.then(r => r.json() as Promise<OutfitData[]>)
 			.then(data => {
@@ -141,7 +139,7 @@ export function App() {
 	}, []);
 
 	// Sources the player can actually reach: sold on a visited planet, or already held.
-	const access = useMemo(() => (save && planetSources ? sourceAccess(save, outfits, planetSources) : null), [save, outfits, planetSources]);
+	const access = useMemo(() => (save && mapData && outfitSets ? sourceAccess(save, outfits, mapData.planetSets, outfitSets) : null), [save, outfits, mapData, outfitSets]);
 	useEffect(() => {
 		if(access)
 			setSources(defaultSources(access));
@@ -206,6 +204,7 @@ export function App() {
 		setRunning(true);
 		setHistory([]);
 		setResult(null);
+		setLoaded("");
 		const activeWeights = mode === "advanced" ? weights : expandSimple(mode === "simple" ? ARCHETYPES[archetype] : simple);
 		const activeAdv = mode === "advanced" ? adv : DEFAULT_ADVANCED;
 		const built = buildProblem({ group, save, outfits, sources, weights: activeWeights, constraints, adv: activeAdv });
@@ -221,7 +220,7 @@ export function App() {
 		const log: Progress[] = [];
 		let last = 0;
 		try {
-			const outcome = await runGA(built.problem, built.baseline, built.ownedPerShip, ga, pool.evaluate,
+			const outcome = await runSearch(built.problem, built.baseline, built.ownedPerShip, ga, pool.evaluate,
 				p => {
 					log.push(p);
 					if(performance.now() - last > 100)
@@ -231,12 +230,72 @@ export function App() {
 					}
 				}, () => stop.current);
 			setHistory([...log]);
-			setResult({ built, outcome, groupId: group.id });
+			setResult({ built, outcome, groupId: group.id, sources: [...sources] });
 		} catch(e) {
 			setError(`Search failed: ${e instanceof Error ? e.message : e}`);
 		} finally {
 			pool.close();
 			setRunning(false);
+		}
+	}
+
+	// A saved loadout is the outfit counts plus the settings it was found with, so it can be rebuilt and compared again.
+	function saveLoadout() {
+		if(!result || !group)
+			return;
+		const { problem } = result.built;
+		const outfitCounts: Record<string, number> = {};
+		problem.pool.forEach((p, i) => {
+			if(result.outcome.best.genome[i] > 0)
+				outfitCounts[p.name] = result.outcome.best.genome[i];
+		});
+		const file: SavedLoadout = {
+			format: "endless-sky-loadout", version: 1, savedAt: new Date().toISOString(), groupId: result.groupId, model: group.model,
+			outfits: outfitCounts, weights: problem.weights, constraints: problem.constraints, adv: problem.adv, sources: result.sources,
+		};
+		const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 1)], { type: "application/json" }));
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = `loadout-${group.model.replace(/[^\w-]+/g, "_")}.json`;
+		link.click();
+		URL.revokeObjectURL(url);
+	}
+
+	async function loadLoadout(file: File | undefined) {
+		if(!file)
+			return;
+		try {
+			if(!save)
+				throw new Error("load a save file first");
+			const saved = JSON.parse(await file.text()) as SavedLoadout;
+			if(saved.format !== "endless-sky-loadout" || !saved.outfits)
+				throw new Error("not a saved loadout");
+			const target = save.groups.find(g => g.id === saved.groupId);
+			if(!target)
+				throw new Error(`this save has no ${saved.model} group with that loadout`);
+			const built = buildProblem({
+				group: target, save, outfits, sources: new Set(saved.sources),
+				weights: { ...DEFAULT_WEIGHTS, ...saved.weights }, constraints: { ...DEFAULT_CONSTRAINTS, ...saved.constraints },
+				adv: { ...DEFAULT_ADVANCED, ...saved.adv },
+			});
+			const genome = new Int16Array(built.problem.pool.length);
+			let missing = 0;
+			for(const [name, count] of Object.entries(saved.outfits))
+			{
+				const i = built.problem.pool.findIndex(p => p.name === name);
+				if(i < 0)
+					missing += count;
+				else
+					genome[i] = count;
+			}
+			const best = { genome, result: evaluate(built.problem, genome), fitness: 0 };
+			setGroupId(target.id);
+			setHistory([]);
+			setResult({ built, outcome: { best, top: [best], generations: 0 }, groupId: target.id, sources: saved.sources });
+			setLoaded(`Loaded ${saved.model} loadout${saved.savedAt ? ` saved ${new Date(saved.savedAt).toLocaleString()}` : ""}${missing ? ` (${missing} outfits unavailable)` : ""}`);
+			setError("");
+		} catch(e) {
+			setError(`Could not load loadout: ${e instanceof Error ? e.message : e}`);
 		}
 	}
 
@@ -404,16 +463,24 @@ export function App() {
 						<button className="primary" disabled={!group || running || !outfits.length} onClick={run}>{running ? "Running…" : "Find best loadout"}</button>
 						<button disabled={!running} onClick={() => { stop.current = true; }}>Stop</button>
 						{last && <span className="muted">gen {last.gen}/{ga.generations} · best {last.best.toFixed(3)} · feasible {(last.feasibleShare * 100).toFixed(0)}%</span>}
+						<div className="row icons">
+							<button title="Save loadout" aria-label="Save loadout" disabled={!result || running || result.groupId !== groupId} onClick={saveLoadout}>💾</button>
+							<span className="filepick">
+								<span className="filepick-face" title="Load loadout">📂</span>
+								<input type="file" aria-label="Load loadout" accept=".json,application/json" disabled={running || !save || !outfits.length} onChange={e => { void loadLoadout(e.target.files?.[0]); e.target.value = ""; }} />
+							</span>
+						</div>
 					</div>
-					<details>
+					<details className="run-settings">
 						<summary>Search settings</summary>
 						<div className="row" style={{ flexWrap: "wrap" }}>
-							{([["population", "Population"], ["generations", "Generations"], ["stagnation", "Stop after idle"]] as const).map(([k, label]) => (
+							{([["population", "Population"], ["generations", "Generations"], ["stagnation", "Stop after idle"], ["runs", "Runs"]] as const).map(([k, label]) => (
 								<label key={k}>{label}<input type="number" min={1} value={ga[k]} onChange={e => setGa(p => ({ ...p, [k]: Number(e.target.value) }))} /></label>
 							))}
 							<label>Workers<input type="number" min={0} max={32} value={workers} onChange={e => setWorkers(Number(e.target.value))} /></label>
 						</div>
 					</details>
+					{loaded ? <div className="up">✓ {loaded}</div> : <>
 					<Chart history={history} />
 					<ProgressBar max={ga.generations} value={last ? last.gen : 0} done={!running && !!last} />
 					<div className="legend">
@@ -422,12 +489,26 @@ export function App() {
 							<span style={{ color: "var(--c-div)" }}>■ diversity{last ? ` ${last.diversity.toFixed(2)}` : ""}</span>
 							<span>(each line has its own scale)</span>
 						</div>
+					</>}
 				</div>
 
 				{result && save && group && result.groupId === group.id && <Results result={result} save={save} group={group} outfits={outfits} map={mapData} outfitSets={outfitSets} />}
 			</div>
 		</div>
 	);
+}
+
+interface SavedLoadout {
+	format: "endless-sky-loadout";
+	version: number;
+	savedAt: string;
+	groupId: string;
+	model: string;
+	outfits: Record<string, number>;
+	weights: Weights;
+	constraints: Constraints;
+	adv: Advanced;
+	sources: string[];
 }
 
 function Results({ result, save, group, outfits, map, outfitSets }: {
@@ -448,7 +529,7 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 		if(!map || !outfitSets)
 			return null;
 		const buy = lines.filter(l => l.toBuy > 0).map(l => ({ name: l.name, count: l.toBuy, cost: l.buyCost }));
-		return buy.length ? planStops(buy, map, outfitSets, landablePlanets(save.visitedPlanets, map, save.reputation)) : null;
+		return buy.length ? planStops(buy, map, outfitSets, (visited => problem.constraints.includeShrouded ? visited : unshroudedPlanets(visited, map))(landablePlanets(save.visitedPlanets, map, save.reputation))) : null;
 	}, [lines, map, outfitSets, save]);
 	// Route from where the pilot is now. A jump drive in the new loadout also allows hops to unlinked systems in range.
 	const route = useMemo(() => {
@@ -459,6 +540,14 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 		const jumpRange = Math.max(DEFAULT_JUMP_RANGE, ...installed.map(p => p.attrs["jump range"] ?? 0));
 		return planTrip(map, save.system, trip.stops.map(s => s.system), { useJumpDrive, jumpRange });
 	}, [map, trip, save, problem, pick]);
+	// Stops in shrouded systems, with the shortest hyperlane chain from a system the map shows.
+	const shroudedPaths = useMemo(() => {
+		const out = new Map<string, string[] | null>();
+		for(const stop of trip?.stops ?? [])
+			if(map?.systems[stop.system]?.shrouded)
+				out.set(stop.system, pathFromVisible(map, stop.system, save.visitedSystems));
+		return out;
+	}, [trip, map, save]);
 	// "Where to buy" follows the shopping-trip order; stops the route can't reach keep their nearest-Sol order at the end.
 	const orderedStops = useMemo(() => {
 		if(!trip)
@@ -533,6 +622,7 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 				{orderedStops.flatMap(stop => stop.planets.map(p => (
 					<div key={`${stop.system}/${p.planet}`}>
 						<h3>{stop.system} - {p.planet} <CopyButton text={stop.system} /></h3>
+						{shroudedPaths.has(stop.system) && <div className="muted">Shrouded{shroudedPaths.get(stop.system) ? `: ${shroudedPaths.get(stop.system)!.join(" > ")}` : ""}</div>}
 						<table>
 							<tbody>{p.items.map(i => <tr key={i.name}><td>{i.name}</td><td className="num">{i.count}</td><td className="num">{i.cost.toLocaleString()} cr</td></tr>)}</tbody>
 						</table>

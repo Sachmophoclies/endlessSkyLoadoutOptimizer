@@ -35,6 +35,8 @@ export interface SaveData {
 	cargo: Record<string, number>;
 	visitedPlanets: string[];
 	reputation: Record<string, number>; // government -> reputation
+	visitedSystems: string[];
+	events: string[]; // events that have fired, in order (the "changes" block)
 	system: string; // where the pilot is now
 	today: number; // current game day, in the same units as the depreciation records
 	// Outfit name -> purchase day -> copies, from "fleet depreciation"; used for resale values.
@@ -63,6 +65,8 @@ export function parseSave(text: string): SaveData {
 	let licenses: string[] = [];
 	const visitedPlanets: string[] = [];
 	const reputation: Record<string, number> = {};
+	const events: string[] = [];
+	const visitedSystems: string[] = [];
 	let system = "";
 	let today = 0;
 	const outfitAges: Record<string, AgeRecord> = {};
@@ -121,16 +125,26 @@ export function parseSave(text: string): SaveData {
 		}
 		else if(key === "system" && node.tokens[1])
 			system = node.tokens[1];
+		else if(key === "visited" && node.tokens[1])
+			visitedSystems.push(node.tokens[1]);
 		else if(key === "visited planet" && node.tokens[1])
 			visitedPlanets.push(node.tokens[1]);
+		else if(key === "changes")
+		{
+			for(const c of node.children)
+				if(c.tokens[0] === "event" && c.tokens[1])
+					events.push(c.tokens[1]);
+		}
 		else if(key === "reputation with")
+		{
 			for(const c of node.children)
 				reputation[c.tokens[0]] = numberAt(c, 1);
+		}
 		else if(key === "licenses")
 			licenses = node.children.map(c => c.tokens[0]);
 	}
 
-	return { pilot, licenses, ships, groups: groupShips(ships), storage, storageByPlanet, cargo, visitedPlanets, reputation, system, today, outfitAges };
+	return { pilot, licenses, ships, groups: groupShips(ships), storage, storageByPlanet, cargo, visitedPlanets, reputation, events, visitedSystems, system, today, outfitAges };
 }
 
 // Ships of the same model with identical hull attributes and identical outfits share a loadout.

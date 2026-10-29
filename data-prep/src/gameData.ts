@@ -96,10 +96,18 @@ export interface Landing {
 	bribeThreshold: number;
 }
 
+// An event's lasting edits to the map, replayed for the events a save has fired (the save's "changes" block).
+// Planet ops: [op, value] with op one of clearSets, addSet, removeSet, rep, bribe, threshold, gov. System ops: link, unlink.
+export interface EventChange {
+	planets: Record<string, Array<[string, string | number | null]>>;
+	systems: Record<string, Array<[string, string]>>;
+}
+
 export interface MapSystem {
 	pos: [number, number];
 	links: string[];
 	government: string;
+	shrouded: boolean; // not shown on the map, so the in-game system search cannot find it
 	planets: string[]; // named `object`s at any depth; these are planet (or station) names
 }
 
@@ -112,7 +120,7 @@ export interface GameData {
 	planetSources: Record<string, string[]>;
 	// Star map for trip planning, and the outfitter sets written directly on each planet.
 	// `requires`: ship attributes that planets demand before a ship may land ("requires: <attribute>", Planet.cpp).
-	map: { systems: Record<string, MapSystem>; planetSets: Record<string, string[]>; landing: Record<string, Landing>; requires: string[] };
+	map: { systems: Record<string, MapSystem>; planetSets: Record<string, string[]>; landing: Record<string, Landing>; events: Record<string, EventChange>; requires: string[] };
 }
 
 function listFiles(dir: string): string[] {
@@ -138,6 +146,7 @@ export function loadGameData(dataDir: string): GameData {
 	const systems: Record<string, MapSystem> = {};
 	const requires = new Set<string>();
 	const planetLanding = new Map<string, Partial<Landing>>();
+	const events: Record<string, EventChange> = {};
 
 	for(const file of listFiles(dataDir))
 	{
@@ -164,6 +173,8 @@ export function loadGameData(dataDir: string): GameData {
 			{
 				collectPlanetOutfitters(node, planetSets);
 				collectRequirements(node, requires);
+				if(key === "event" && node.tokens[1])
+					events[node.tokens[1]] = readEvent(node);
 				if(key === "planet" && node.tokens.length >= 2)
 					readLanding(node, planetLanding);
 				if(key === "planet" && node.tokens.length >= 2)
@@ -201,7 +212,7 @@ export function loadGameData(dataDir: string): GameData {
 
 	return {
 		planetSources,
-		map: { systems, planetSets: Object.fromEntries(staticPlanetSets), landing: finishLanding(staticPlanetSets, planetLanding, systems), requires: [...requires].sort() },
+		map: { systems, planetSets: Object.fromEntries(staticPlanetSets), landing: finishLanding(staticPlanetSets, planetLanding, systems, events), events: pruneEvents(events), requires: [...requires].sort() },
 		outfits: finishedOutfits,
 		ships: finishedShips,
 		outfitters: {
@@ -406,6 +417,51 @@ function finishShips(raw: Map<string, RawShip>): Map<string, ShipData> {
 	return result;
 }
 
+function readEvent(node: DataNode): EventChange {
+	const change: EventChange = { planets: {}, systems: {} };
+	for(const c of node.children)
+	{
+		const name = c.tokens[1];
+		if(c.tokens[0] === "planet" && name)
+		{
+			const ops: EventChange["planets"][string] = [];
+			for(const d of c.children)
+			{
+				const remove = d.tokens[0] === "remove", add = d.tokens[0] === "add";
+				const key = d.tokens[remove || add ? 1 : 0], value = d.tokens[remove || add ? 2 : 1];
+				if(key === "outfitter")
+					ops.push(remove ? (value ? ["removeSet", value] : ["clearSets", null]) : value ? ["addSet", value] : ["clearSets", null]);
+				else if(key === "required reputation")
+					ops.push(["rep", remove ? 0 : numberAt(d, add ? 2 : 1)]);
+				else if(key === "bribe")
+					ops.push(["bribe", remove ? 0 : numberAt(d, add ? 2 : 1)]);
+				else if(key === "bribe threshold")
+					ops.push(["threshold", remove ? 0 : numberAt(d, add ? 2 : 1)]);
+				else if(key === "government" && !remove && value)
+					ops.push(["gov", value]);
+			}
+			if(ops.length)
+				change.planets[name] = ops;
+		}
+		else if(c.tokens[0] === "system" && name)
+		{
+			const ops: Array<[string, string]> = [];
+			for(const d of c.children)
+				if(d.tokens[0] === "link" && d.tokens[1])
+					ops.push(["link", d.tokens[1]]);
+				else if(d.tokens[0] === "remove" && d.tokens[1] === "link" && d.tokens[2])
+					ops.push(["unlink", d.tokens[2]]);
+			if(ops.length)
+				change.systems[name] = ops;
+		}
+	}
+	return change;
+}
+
+function pruneEvents(events: Record<string, EventChange>): Record<string, EventChange> {
+	return Object.fromEntries(Object.entries(events).filter(([, e]) => Object.keys(e.planets).length || Object.keys(e.systems).length));
+}
+
 function readLanding(node: DataNode, out: Map<string, Partial<Landing>>): void {
 	const entry = out.get(node.tokens[1]) ?? out.set(node.tokens[1], {}).get(node.tokens[1])!;
 	for(const c of node.children)
@@ -422,9 +478,15 @@ function readLanding(node: DataNode, out: Map<string, Partial<Landing>>): void {
 // Landing rules for every planet with an outfitter; a planet without its own government uses its system's.
 function finishLanding(
 	withOutfitter: Map<string, string[]>, read: Map<string, Partial<Landing>>, systems: Record<string, MapSystem>,
+	events: Record<string, EventChange>,
 ): Record<string, Landing> {
 	const out: Record<string, Landing> = {};
-	for(const planet of withOutfitter.keys())
+	const planets = new Set(withOutfitter.keys());
+	for(const event of Object.values(events))
+		for(const [planet, ops] of Object.entries(event.planets))
+			if(ops.some(([op]) => op === "addSet"))
+				planets.add(planet);
+	for(const planet of planets)
 	{
 		const l = read.get(planet) ?? {};
 		const system = Object.values(systems).find(s => s.planets.includes(planet));
@@ -437,11 +499,13 @@ function finishLanding(
 }
 
 function readSystem(node: DataNode): MapSystem {
-	const system: MapSystem = { pos: [0, 0], links: [], government: "", planets: [] };
+	const system: MapSystem = { pos: [0, 0], links: [], government: "", shrouded: false, planets: [] };
 	for(const child of node.children)
 	{
 		if(child.tokens[0] === "pos" && child.tokens.length >= 3)
 			system.pos = [numberAt(child, 1), numberAt(child, 2)];
+		else if(child.tokens[0] === "shrouded")
+			system.shrouded = true;
 		else if(child.tokens[0] === "government" && child.tokens[1])
 			system.government = child.tokens[1];
 		else if(child.tokens[0] === "link" && child.tokens[1])

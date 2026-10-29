@@ -1,9 +1,10 @@
 // Trip planner for the shopping list: which systems to visit to buy everything with the fewest stops.
 
 export interface MapData {
-	systems: Record<string, { pos: [number, number]; links: string[]; planets: string[] }>;
+	systems: Record<string, { pos: [number, number]; links: string[]; planets: string[]; shrouded?: boolean }>;
 	planetSets: Record<string, string[]>; // planet -> outfitter set names
 	landing: Record<string, Landing>; // planet -> what it takes to land (planets with an outfitter)
+	events: Record<string, EventChange>; // lasting map edits made by events
 	requires: string[]; // ship attributes some planets demand before landing
 }
 
@@ -24,6 +25,89 @@ export function landablePlanets(planets: Iterable<string>, map: MapData, reputat
 		const rep = reputation[l.government] ?? 0;
 		return rep >= l.requiredReputation || (l.bribe > 0 && rep >= l.bribeThreshold);
 	});
+}
+
+export interface EventChange {
+	planets: Record<string, Array<[string, string | number | null]>>;
+	systems: Record<string, Array<[string, string]>>;
+}
+
+// The map as the save left it: outfitters, landing rules and links changed by the events that have fired, in order.
+export function applyEvents(map: MapData, fired: string[]): MapData {
+	const planetSets: Record<string, string[]> = { ...map.planetSets };
+	const landing: Record<string, Landing> = Object.fromEntries(Object.entries(map.landing).map(([k, v]) => [k, { ...v }]));
+	const links = new Map(Object.entries(map.systems).map(([k, v]) => [k, new Set(v.links)]));
+	for(const name of fired)
+	{
+		const event = map.events[name];
+		if(!event)
+			continue;
+		for(const [planet, ops] of Object.entries(event.planets))
+			for(const [op, value] of ops)
+			{
+				const l = landing[planet] ??= { government: "", requiredReputation: 0, bribe: 0, bribeThreshold: 0 };
+				if(op === "clearSets")
+					planetSets[planet] = [];
+				else if(op === "addSet" && !(planetSets[planet] ??= []).includes(value as string))
+					planetSets[planet].push(value as string);
+				else if(op === "removeSet")
+					planetSets[planet] = (planetSets[planet] ?? []).filter(s => s !== value);
+				else if(op === "rep")
+					l.requiredReputation = value as number;
+				else if(op === "bribe")
+					l.bribe = value as number;
+				else if(op === "threshold")
+					l.bribeThreshold = value as number;
+				else if(op === "gov")
+					l.government = value as string;
+			}
+		for(const [system, ops] of Object.entries(event.systems))
+			for(const [op, other] of ops)
+				if(links.has(system))
+					op === "link" ? links.get(system)!.add(other) : links.get(system)!.delete(other);
+	}
+	const systems = Object.fromEntries(Object.entries(map.systems).map(([k, v]) => [k, { ...v, links: [...links.get(k)!] }]));
+	return { ...map, systems, planetSets, landing };
+}
+
+// Drops planets in shrouded systems, which the map (and its system search) never shows.
+export function unshroudedPlanets(planets: Iterable<string>, map: MapData): string[] {
+	const shrouded = new Set(Object.values(map.systems).filter(s => s.shrouded).flatMap(s => s.planets));
+	return [...planets].filter(p => !shrouded.has(p));
+}
+
+// Shortest chain of hyperlanes from a system the map shows (visited and not shrouded) to `system`, both ends included;
+// null when no such system is linked to it.
+export function pathFromVisible(map: MapData, system: string, visited: Iterable<string>): string[] | null {
+	const visible = new Set([...visited].filter(s => !map.systems[s]?.shrouded));
+	const adjacent = new Map<string, Set<string>>();
+	const link = (a: string, b: string): void => void (adjacent.get(a) ?? adjacent.set(a, new Set()).get(a)!).add(b);
+	for(const [name, data] of Object.entries(map.systems))
+		for(const other of data.links)
+		{
+			link(name, other);
+			link(other, name);
+		}
+	const previous = new Map<string, string | null>([[system, null]]);
+	const queue = [system];
+	for(let i = 0; i < queue.length; ++i)
+	{
+		const here = queue[i];
+		if(visible.has(here))
+		{
+			const path = [here];
+			for(let at = previous.get(here); at; at = previous.get(at))
+				path.push(at);
+			return path;
+		}
+		for(const next of adjacent.get(here) ?? [])
+			if(!previous.has(next))
+			{
+				previous.set(next, here);
+				queue.push(next);
+			}
+	}
+	return null;
 }
 
 export interface Purchase {

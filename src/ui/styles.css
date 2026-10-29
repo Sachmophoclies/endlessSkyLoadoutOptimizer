@@ -63,3 +63,8 @@ label.disabled { color: var(--muted); cursor: not-allowed; }
 .slide { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .5s ease, margin-bottom .5s ease; }
 .slide.open { grid-template-rows: 1fr; margin-bottom: 8px; }
 .slide > * { overflow: hidden; min-height: 0; margin-bottom: 0; }
+.icons { margin-left: auto; }
+/* Search settings: the gap above matches the 6px under its label. */
+.run-settings { margin-top: 6px; }
+.icons button { padding: 2px 8px; }
+.icons .filepick-face { padding: 2px 8px; }
