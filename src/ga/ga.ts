@@ -344,7 +344,15 @@ export async function runSearch(
 	problem: Problem, baseline: Genome, ownedPerShip: number[], params: GAParams,
 	evaluate: Evaluator, onProgress: (p: Progress) => void, shouldStop: () => boolean,
 ): Promise<GAOutcome> {
-	const runs = Math.max(1, Math.floor(params.runs));
+	// A blank or invalid box in the settings must not reach Array(n).
+	const whole = (v: number, fallback: number, min: number, max: number): number =>
+		Number.isFinite(v) ? Math.min(max, Math.max(min, Math.floor(v))) : fallback;
+	const runs = whole(params.runs, DEFAULT_GA.runs, 1, 16);
+	params = {
+		...params, population: whole(params.population, DEFAULT_GA.population, 4, 5000),
+		generations: whole(params.generations, DEFAULT_GA.generations, 1, 5000),
+		stagnation: whole(params.stagnation, DEFAULT_GA.stagnation, 1, 5000),
+	};
 	const latest: Progress[] = [];
 	const finished: boolean[] = new Array(runs).fill(false);
 	const report = (): void => {
