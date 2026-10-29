@@ -7,7 +7,7 @@ import type { MapData } from "../src/core/stops.ts";
 const sys = (x: number, links: string[] = []) => ({ pos: [x, 0] as [number, number], links, planets: [] });
 const map: MapData = {
 	systems: { A: sys(0, ["B"]), B: sys(50, ["C"]), C: sys(100, ["D"]), D: sys(150), E: sys(230), F: sys(1000) },
-	planetSets: {}, requires: [],
+	planetSets: {}, landing: {}, requires: [],
 };
 const hyper = { useJumpDrive: false, jumpRange: 100 };
 const jump = { useJumpDrive: true, jumpRange: 100 };

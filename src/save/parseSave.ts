@@ -34,6 +34,7 @@ export interface SaveData {
 	storageByPlanet: Record<string, Record<string, number>>;
 	cargo: Record<string, number>;
 	visitedPlanets: string[];
+	reputation: Record<string, number>; // government -> reputation
 	system: string; // where the pilot is now
 	today: number; // current game day, in the same units as the depreciation records
 	// Outfit name -> purchase day -> copies, from "fleet depreciation"; used for resale values.
@@ -61,6 +62,7 @@ export function parseSave(text: string): SaveData {
 	let cargo: Record<string, number> = {};
 	let licenses: string[] = [];
 	const visitedPlanets: string[] = [];
+	const reputation: Record<string, number> = {};
 	let system = "";
 	let today = 0;
 	const outfitAges: Record<string, AgeRecord> = {};
@@ -121,11 +123,14 @@ export function parseSave(text: string): SaveData {
 			system = node.tokens[1];
 		else if(key === "visited planet" && node.tokens[1])
 			visitedPlanets.push(node.tokens[1]);
+		else if(key === "reputation with")
+			for(const c of node.children)
+				reputation[c.tokens[0]] = numberAt(c, 1);
 		else if(key === "licenses")
 			licenses = node.children.map(c => c.tokens[0]);
 	}
 
-	return { pilot, licenses, ships, groups: groupShips(ships), storage, storageByPlanet, cargo, visitedPlanets, system, today, outfitAges };
+	return { pilot, licenses, ships, groups: groupShips(ships), storage, storageByPlanet, cargo, visitedPlanets, reputation, system, today, outfitAges };
 }
 
 // Ships of the same model with identical hull attributes and identical outfits share a loadout.

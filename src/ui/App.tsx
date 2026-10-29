@@ -8,7 +8,7 @@ import { type Built, buildProblem, unsatisfiable } from "../core/problem.ts";
 import { defaultSources, isGameSource, obtainableOutfits, sourceAccess } from "../core/sources.ts";
 import { resaleList, shoppingList } from "../core/shopping.ts";
 import { DEFAULT_JUMP_RANGE, planTrip } from "../core/route.ts";
-import { type MapData, planStops } from "../core/stops.ts";
+import { type MapData, landablePlanets, planStops } from "../core/stops.ts";
 import { evaluate } from "../core/stats.ts";
 import { DEFAULT_GA, type GAOutcome, type GAParams, type Progress, runGA } from "../ga/ga.ts";
 import { createPool } from "../ga/pool.ts";
@@ -448,7 +448,7 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 		if(!map || !outfitSets)
 			return null;
 		const buy = lines.filter(l => l.toBuy > 0).map(l => ({ name: l.name, count: l.toBuy, cost: l.buyCost }));
-		return buy.length ? planStops(buy, map, outfitSets, save.visitedPlanets) : null;
+		return buy.length ? planStops(buy, map, outfitSets, landablePlanets(save.visitedPlanets, map, save.reputation)) : null;
 	}, [lines, map, outfitSets, save]);
 	// Route from where the pilot is now. A jump drive in the new loadout also allows hops to unlinked systems in range.
 	const route = useMemo(() => {

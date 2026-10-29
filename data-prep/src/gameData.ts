@@ -88,9 +88,18 @@ const NON_ATTRIBUTE_KEYS = new Set([
 	"jump in sound", "jump out sound", "cargo scan sound", "outfit scan sound", "flotsam sprite", "ammo", "linked",
 ]);
 
+// What a planet demands before the player may land (Planet.cpp / Politics::CanLand). Reputation is with `government`.
+export interface Landing {
+	government: string;
+	requiredReputation: number;
+	bribe: number;
+	bribeThreshold: number;
+}
+
 export interface MapSystem {
 	pos: [number, number];
 	links: string[];
+	government: string;
 	planets: string[]; // named `object`s at any depth; these are planet (or station) names
 }
 
@@ -103,7 +112,7 @@ export interface GameData {
 	planetSources: Record<string, string[]>;
 	// Star map for trip planning, and the outfitter sets written directly on each planet.
 	// `requires`: ship attributes that planets demand before a ship may land ("requires: <attribute>", Planet.cpp).
-	map: { systems: Record<string, MapSystem>; planetSets: Record<string, string[]>; requires: string[] };
+	map: { systems: Record<string, MapSystem>; planetSets: Record<string, string[]>; landing: Record<string, Landing>; requires: string[] };
 }
 
 function listFiles(dir: string): string[] {
@@ -128,6 +137,7 @@ export function loadGameData(dataDir: string): GameData {
 	const staticPlanetSets = new Map<string, string[]>();
 	const systems: Record<string, MapSystem> = {};
 	const requires = new Set<string>();
+	const planetLanding = new Map<string, Partial<Landing>>();
 
 	for(const file of listFiles(dataDir))
 	{
@@ -154,6 +164,8 @@ export function loadGameData(dataDir: string): GameData {
 			{
 				collectPlanetOutfitters(node, planetSets);
 				collectRequirements(node, requires);
+				if(key === "planet" && node.tokens.length >= 2)
+					readLanding(node, planetLanding);
 				if(key === "planet" && node.tokens.length >= 2)
 					for(const c of node.children)
 						if(c.tokens[0] === "outfitter" && c.tokens[1])
@@ -189,7 +201,7 @@ export function loadGameData(dataDir: string): GameData {
 
 	return {
 		planetSources,
-		map: { systems, planetSets: Object.fromEntries(staticPlanetSets), requires: [...requires].sort() },
+		map: { systems, planetSets: Object.fromEntries(staticPlanetSets), landing: finishLanding(staticPlanetSets, planetLanding, systems), requires: [...requires].sort() },
 		outfits: finishedOutfits,
 		ships: finishedShips,
 		outfitters: {
@@ -394,12 +406,44 @@ function finishShips(raw: Map<string, RawShip>): Map<string, ShipData> {
 	return result;
 }
 
+function readLanding(node: DataNode, out: Map<string, Partial<Landing>>): void {
+	const entry = out.get(node.tokens[1]) ?? out.set(node.tokens[1], {}).get(node.tokens[1])!;
+	for(const c of node.children)
+		if(c.tokens[0] === "government" && c.tokens[1])
+			entry.government = c.tokens[1];
+		else if(c.tokens[0] === "required reputation")
+			entry.requiredReputation = numberAt(c, 1);
+		else if(c.tokens[0] === "bribe")
+			entry.bribe = numberAt(c, 1);
+		else if(c.tokens[0] === "bribe threshold")
+			entry.bribeThreshold = numberAt(c, 1);
+}
+
+// Landing rules for every planet with an outfitter; a planet without its own government uses its system's.
+function finishLanding(
+	withOutfitter: Map<string, string[]>, read: Map<string, Partial<Landing>>, systems: Record<string, MapSystem>,
+): Record<string, Landing> {
+	const out: Record<string, Landing> = {};
+	for(const planet of withOutfitter.keys())
+	{
+		const l = read.get(planet) ?? {};
+		const system = Object.values(systems).find(s => s.planets.includes(planet));
+		out[planet] = {
+			government: l.government ?? system?.government ?? "", requiredReputation: l.requiredReputation ?? 0,
+			bribe: l.bribe ?? 0, bribeThreshold: l.bribeThreshold ?? 0,
+		};
+	}
+	return out;
+}
+
 function readSystem(node: DataNode): MapSystem {
-	const system: MapSystem = { pos: [0, 0], links: [], planets: [] };
+	const system: MapSystem = { pos: [0, 0], links: [], government: "", planets: [] };
 	for(const child of node.children)
 	{
 		if(child.tokens[0] === "pos" && child.tokens.length >= 3)
 			system.pos = [numberAt(child, 1), numberAt(child, 2)];
+		else if(child.tokens[0] === "government" && child.tokens[1])
+			system.government = child.tokens[1];
 		else if(child.tokens[0] === "link" && child.tokens[1])
 			system.links.push(child.tokens[1]);
 		else if(child.tokens[0] === "object")

@@ -3,7 +3,27 @@
 export interface MapData {
 	systems: Record<string, { pos: [number, number]; links: string[]; planets: string[] }>;
 	planetSets: Record<string, string[]>; // planet -> outfitter set names
+	landing: Record<string, Landing>; // planet -> what it takes to land (planets with an outfitter)
 	requires: string[]; // ship attributes some planets demand before landing
+}
+
+export interface Landing {
+	government: string;
+	requiredReputation: number;
+	bribe: number;
+	bribeThreshold: number;
+}
+
+// Planets the pilot can land on (Politics::CanLand): reputation with the planet's government reaches the requirement,
+// or the planet takes bribes and the reputation clears the bribe threshold. Planets without rules are open.
+export function landablePlanets(planets: Iterable<string>, map: MapData, reputation: Record<string, number>): string[] {
+	return [...planets].filter(planet => {
+		const l = map.landing[planet];
+		if(!l || !l.requiredReputation)
+			return true;
+		const rep = reputation[l.government] ?? 0;
+		return rep >= l.requiredReputation || (l.bribe > 0 && rep >= l.bribeThreshold);
+	});
 }
 
 export interface Purchase {

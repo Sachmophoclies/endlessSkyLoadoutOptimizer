@@ -3,7 +3,7 @@ import type { SaveData, ShipGroup } from "../save/parseSave.ts";
 import type { Advanced, Constraints, Genome, PoolItem, Problem, Weights } from "./model.ts";
 
 // Attributes that bound what can be installed. Only negative contributions count as "costs".
-const CAP_RE = /(capacity|space|ports|mounts)$/;
+const CAP_RE = /(capacity|space|ports|mounts|connection point)$/;
 const NOT_CAP = new Set(["energy capacity", "fuel capacity", "heat capacity", "cargo space"]);
 const HULL_KEYS = ["outfit space", "weapon capacity", "engine capacity", "gun ports", "turret mounts"];
 const MAX_UNBOUNDED = 500; // ammo and similar items bounded only by capacity providers
