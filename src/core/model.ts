@@ -4,7 +4,7 @@ export type { Attributes, WeaponInfo };
 
 export const STAT_KEYS = [
 	"offence", "shieldRegen", "hullRepair", "shieldProtection", "hullProtection", "missileDefence",
-	"heatTolerance", "energyReserve", "turning", "thrust", "maxSpeed",
+	"heatTolerance", "energyReserve", "energyGeneration", "turning", "thrust", "maxSpeed",
 	"spareCrew", "jumps", "fuelCapacity", "fuelRegen", "cargo", "cost",
 ] as const;
 export type StatKey = typeof STAT_KEYS[number];
@@ -13,7 +13,7 @@ export const STAT_LABELS: Record<StatKey, string> = {
 	offence: "Offence (sustained dmg/s)",
 		shieldRegen: "Shield regen /s", hullRepair: "Hull repair /s", missileDefence: "Missile defence",
 		shieldProtection: "Shield protection (x damage absorbed)", hullProtection: "Hull protection (x damage absorbed)",
-	heatTolerance: "Heat tolerance", energyReserve: "Energy reserve", turning: "Turning (deg/s)",
+	heatTolerance: "Heat tolerance", energyReserve: "Energy reserve", energyGeneration: "Energy generation (net /s)", turning: "Turning (deg/s)",
 	thrust: "Acceleration", maxSpeed: "Max speed", spareCrew: "Spare crew (boarding)",
 	jumps: "Jumps per tank", fuelCapacity: "Fuel capacity", fuelRegen: "Fuel regen /s (generators + ramscoop)", cargo: "Cargo space", cost: "Outfit cost (credits)",
 };
@@ -22,7 +22,7 @@ export type Weights = Record<StatKey, number>;
 
 export const DEFAULT_WEIGHTS: Weights = {
 	offence: 80, shieldRegen: 20, hullRepair: 10, shieldProtection: 10, hullProtection: 10, missileDefence: 20,
-	heatTolerance: 10, energyReserve: 10, turning: 30, thrust: 30, maxSpeed: 20,
+	heatTolerance: 10, energyReserve: 10, energyGeneration: 10, turning: 30, thrust: 30, maxSpeed: 20,
 	spareCrew: 0, jumps: 10, fuelCapacity: 0, fuelRegen: 0, cargo: 0, cost: 10,
 };
 
@@ -36,7 +36,7 @@ export interface Constraints {
 	heatSustainable: boolean;
 	ownedLimits: boolean;
 	ignoreLicenses: boolean;
-	plunder: boolean;
+	plunder: "none" | "aggressive" | "all"; // plunderable outfits: not at all, only from governments hostile to you, or any
 	includeShrouded: boolean;
 	minFuel: number;
 	minCargo: number;
@@ -48,7 +48,7 @@ export interface Constraints {
 export const DEFAULT_CONSTRAINTS: Constraints = {
 	instantaneousOnly: true, noAmmo: true, requireHyperdrive: true, requireJumpDrive: true, requireRamscoop: true,
 	positiveEnergy: true, heatSustainable: true, ownedLimits: false, ignoreLicenses: false,
-	plunder: true, includeShrouded: true, minFuel: 0, minCargo: 0, minBunks: 0,
+	plunder: "none", includeShrouded: true, minFuel: 0, minCargo: 0, minBunks: 0,
 	requiredAttributes: [],
 };
 
@@ -68,6 +68,7 @@ export const DEFAULT_ADVANCED: Advanced = {
 };
 
 export interface PoolItem {
+	locked?: boolean; // a unique outfit the group already carries: the search keeps exactly the current count
 	name: string;
 	category: string;
 	source: string;

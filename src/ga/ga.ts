@@ -102,7 +102,7 @@ export async function runGA(
 	const pool = problem.pool;
 	const n = pool.length;
 	const maxOf = pool.map((p, i) => Math.min(p.max, ownedPerShip[i] ?? p.max));
-	const usable = maxOf.map((m, i) => (m > 0 ? i : -1)).filter(i => i >= 0);
+	const usable = maxOf.map((m, i) => (m > 0 && !pool[i].locked ? i : -1)).filter(i => i >= 0);
 	const scorer = new Scorer(problem, params.cap);
 
 	const used = new Float64Array(problem.capKeys.length);
@@ -163,6 +163,9 @@ export async function runGA(
 	};
 	const randomGenome = (): Genome => {
 		const g = new Int16Array(n);
+		for(let i = 0; i < n; ++i)
+			if(pool[i].locked)
+				g[i] = baseline[i];
 		fill(g, 20 + Math.floor(rand() * 60));
 		return g;
 	};
@@ -392,7 +395,7 @@ async function hillClimb(
 ): Promise<Individual> {
 	const pool = problem.pool;
 	const maxOf = pool.map((p, i) => Math.min(p.max, ownedPerShip[i] ?? p.max));
-	const usable = maxOf.map((m, i) => (m > 0 ? i : -1)).filter(i => i >= 0);
+	const usable = maxOf.map((m, i) => (m > 0 && !pool[i].locked ? i : -1)).filter(i => i >= 0);
 	const legal = (g: Genome): boolean => {
 		for(const i of usable)
 			if(g[i] > maxOf[i])

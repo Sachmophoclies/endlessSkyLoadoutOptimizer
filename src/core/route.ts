@@ -2,6 +2,8 @@ import type { MapData } from "./stops.ts";
 
 // Shopping-trip routing. Travel is counted in jumps. A ship with a jump drive can also jump to any system within
 // `jumpRange` map units (System::DEFAULT_NEIGHBOR_DISTANCE is 100); hyperlanes work for hyperdrives and jump drives alike.
+// A system with its own "jump range" replaces that range for jumps leaving it (System::JumpNeighbors), so such jumps
+// are one-way: Ablub reaches Sail, but Sail (range 30) cannot reach Ablub.
 export const DEFAULT_JUMP_RANGE = 100;
 
 export interface RouteOptions {
@@ -30,7 +32,7 @@ function neighbours(map: MapData, adjacent: Map<string, Set<string>>, names: str
 	const out = new Set(adjacent.get(system) ?? []);
 	if(o.useJumpDrive)
 		for(const other of names)
-			if(other !== system && dist(map, system, other) <= o.jumpRange)
+			if(other !== system && dist(map, system, other) <= (map.systems[system]?.jumpRange || o.jumpRange))
 				out.add(other);
 	return out;
 }
@@ -44,7 +46,7 @@ export function makeRouter(map: MapData, options: RouteOptions): Router {
 	const names = Object.keys(map.systems);
 	const adjacent = new Map<string, Set<string>>();
 	const link = (a: string, b: string): void => void (adjacent.get(a) ?? adjacent.set(a, new Set()).get(a)!).add(b);
-	let longest = options.useJumpDrive ? options.jumpRange : 1;
+	let longest = options.useJumpDrive ? Math.max(options.jumpRange, ...names.map(n => map.systems[n].jumpRange ?? 0)) : 1;
 	for(const name of names)
 		for(const other of map.systems[name].links)
 			if(map.systems[other])

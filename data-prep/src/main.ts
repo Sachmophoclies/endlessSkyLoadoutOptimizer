@@ -23,6 +23,7 @@ write("outfits.json", sorted(game.outfits));
 write("outfitters.json", game.outfitters);
 write("planets.json", game.planetSources);
 write("map.json", game.map);
+write("plunder.json", game.plunder);
 
 const outfits = [...game.outfits.values()];
 const weapons = outfits.filter(o => o.weapon);

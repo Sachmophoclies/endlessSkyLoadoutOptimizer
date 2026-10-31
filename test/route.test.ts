@@ -38,3 +38,12 @@ test("a stop at the start costs nothing and unreachable stops are listed", () =>
 	assert.equal(trip.jumps, 0);
 	assert.deepEqual(trip.unreachable, ["F"]);
 });
+
+test("a system's own jump range limits jumps leaving it, so they are one-way", () => {
+	const limited: MapData = {
+		systems: { P: sys(0), Q: { ...sys(50), jumpRange: 30 } },
+		planetSets: {}, landing: {}, events: {}, requires: [],
+	};
+	assert.deepEqual(makeRouter(limited, jump).path("P", "Q"), ["Q"]);
+	assert.equal(makeRouter(limited, jump).path("Q", "P"), null);
+});

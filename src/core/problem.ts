@@ -1,4 +1,5 @@
-import type { OutfitData } from "../../data-prep/src/types.ts";
+import type { OutfitData, PlunderData } from "../../data-prep/src/types.ts";
+import { hostileSource } from "./plunder.ts";
 import type { SaveData, ShipGroup } from "../save/parseSave.ts";
 import type { Advanced, Constraints, Genome, PoolItem, Problem, Weights } from "./model.ts";
 
@@ -12,6 +13,7 @@ const HULL_KEYS = ["outfit space", "weapon capacity", "engine capacity", "gun po
 const MAX_UNBOUNDED = 500; // ammo and similar items bounded only by capacity providers
 
 export interface BuildOptions {
+	plunder?: PlunderData | null;
 	group: ShipGroup;
 	save: SaveData;
 	outfits: OutfitData[];
@@ -36,10 +38,10 @@ export function buildProblem(o: BuildOptions): Built {
 	const n = group.ships.length;
 	const licensed = new Set(save.licenses);
 
-	// Total owned: installed on any of your ships, in storage, in cargo.
+	// Total owned: installed on this group's ships, in storage, in cargo. Outfits on your other ships are left alone.
 	const owned = new Map<string, number>();
 	const add = (name: string, count: number): void => void owned.set(name, (owned.get(name) ?? 0) + count);
-	for(const ship of save.ships)
+	for(const ship of group.ships)
 		for(const [name, c] of Object.entries(ship.outfits))
 			add(name, c);
 	for(const [name, c] of Object.entries(save.storage))
@@ -54,10 +56,12 @@ export function buildProblem(o: BuildOptions): Built {
 			ammoNames.add(x.weapon.ammo.outfit);
 
 	// Copies of an outfit can be bought, or (if allowed) plundered: not sold anywhere, no license needed.
-	const buyableOf = (data: OutfitData): boolean => data.sold && (con.ignoreLicenses || data.licenses.every(l => licensed.has(l)));
-	const obtainable = (data: OutfitData): boolean => buyableOf(data) || (con.plunder && data.plunderable);
+	const fired = new Set(save.events);
+	const buyableOf = (data: OutfitData): boolean => (data.sold || !!data.soldAfter?.some(e => fired.has(e))) && (con.ignoreLicenses || data.licenses.every(l => licensed.has(l)));
+	const plunderOk = (data: OutfitData): boolean => data.plunderable && (con.plunder === "all" || (con.plunder === "aggressive" && hostileSource(data.name, save.reputation, o.plunder ?? null)));
+	const obtainable = (data: OutfitData): boolean => buyableOf(data) || plunderOk(data);
 
-	const candidates: Array<{ data: OutfitData; max: number }> = [];
+	const candidates: Array<{ data: OutfitData; max: number; locked?: boolean }> = [];
 	for(const data of o.outfits)
 	{
 		const current = group.outfits[data.name] ?? 0;
@@ -78,6 +82,12 @@ export function buildProblem(o: BuildOptions): Built {
 			banned = true;
 		if(banned && !current)
 			continue;
+		// Unique outfits (the "unique" attribute: quest rewards and the like) stay exactly as the group has them.
+		if(data.attributes.unique && current > 0)
+		{
+			candidates.push({ data, max: current, locked: true });
+			continue;
+		}
 		max = Math.min(max, hullBound(data, group.hull));
 		candidates.push({ data, max: banned ? 0 : max });
 	}
@@ -91,8 +101,8 @@ export function buildProblem(o: BuildOptions): Built {
 				capKeys.add(k);
 	const keys = [...capKeys];
 
-	const pool: PoolItem[] = candidates.map(({ data, max }) => ({
-		name: data.name, category: data.category, source: data.source, mass: data.mass, cost: data.cost,
+	const pool: PoolItem[] = candidates.map(({ data, max, locked }) => ({
+		locked, name: data.name, category: data.category, source: data.source, mass: data.mass, cost: data.cost,
 		attrs: data.attributes, weapon: data.weapon, slot: data.slot, max,
 		ammoIdx: data.weapon?.ammo ? (index.get(data.weapon.ammo.outfit) ?? -1) : -1,
 		cap: keys.map(k => data.attributes[k] ?? 0),
@@ -140,8 +150,8 @@ export function unsatisfiable(problem: Problem): string[] {
 		|| problem.pool.some((p, i) => (p.attrs[key] ?? 0) > 0 && (problem.havePerShip[i] > 0 || p.max > 0));
 	if(con.requireHyperdrive && !hasDrive("hyperdrive") && !hasDrive("scram drive"))
 		out.push("Must have hyperdrive: no hyperdrive or scram drive is available to every ship in this group");
-	if(con.requireJumpDrive && !con.plunder && !hasDrive("jump drive"))
-		out.push(`Must have jump drive: "Include plunderable outfits" is off, and your ships, storage and cargo hold no jump drive to give each of this group's ${problem.shipCount} ships`);
+	if(con.requireJumpDrive && !hasDrive("jump drive"))
+		out.push(`Must have jump drive: none is available to each of this group's ${problem.shipCount} ships from what you own, what is sold, or what the plunderable setting allows`);
 	for(const attribute of con.requiredAttributes)
 		if(!hasDrive(attribute))
 			out.push(`Must have ${attribute}: no outfit that provides it is available to every ship in this group`);

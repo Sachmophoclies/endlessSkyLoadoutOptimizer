@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { type DataNode, parseData, numberAt } from "./dataNode.ts";
 import { type RawWeapon, deriveWeapon, loadWeaponNode, newRawWeapon } from "./weapons.ts";
-import type { Attributes, OutfitData, OutfitterData, ShipData } from "./types.ts";
+import type { Attributes, OutfitData, OutfitterData, PlunderData, PlunderSource, ShipData } from "./types.ts";
 
 // Defaults from Outfit.h.
 const DEFAULT_HYPERDRIVE_COST = 100;
@@ -101,6 +101,8 @@ export interface Landing {
 export interface EventChange {
 	planets: Record<string, Array<[string, string | number | null]>>;
 	systems: Record<string, Array<[string, string]>>;
+	// Outfitter set name -> outfits the event adds to it, for every planet that shows the set.
+	sets?: Record<string, string[]>;
 }
 
 export interface MapSystem {
@@ -108,10 +110,12 @@ export interface MapSystem {
 	links: string[];
 	government: string;
 	shrouded: boolean; // not shown on the map, so the in-game system search cannot find it
+	jumpRange?: number; // a jump drive leaving this system reaches this far, whatever the ship's own range
 	planets: string[]; // named `object`s at any depth; these are planet (or station) names
 }
 
 export interface GameData {
+	plunder: PlunderData;
 	outfits: Map<string, OutfitData>;
 	ships: Map<string, ShipData>;
 	outfitters: OutfitterData;
@@ -147,6 +151,8 @@ export function loadGameData(dataDir: string): GameData {
 	const requires = new Set<string>();
 	const planetLanding = new Map<string, Partial<Landing>>();
 	const events: Record<string, EventChange> = {};
+	const fleets: Array<{ government: string; ships: Set<string> }> = [];
+	const startReputation: Record<string, number> = {};
 
 	for(const file of listFiles(dataDir))
 	{
@@ -162,6 +168,18 @@ export function loadGameData(dataDir: string): GameData {
 				if(!outfit)
 					outfits.set(name, outfit = newRawOutfit(name, source));
 				loadOutfitNode(outfit, node);
+			}
+			else if(key === "fleet" && node.tokens.length >= 2)
+			{
+				const government = node.children.find(c => c.tokens[0] === "government")?.tokens[1];
+				if(government)
+					fleets.push({ government, ships: new Set(node.children.filter(c => c.tokens[0] === "variant").flatMap(v => v.children.map(c => c.tokens[0]))) });
+			}
+			else if(key === "government" && node.tokens.length >= 2)
+			{
+				const rep = node.children.find(c => c.tokens[0] === "player reputation");
+				if(rep)
+					startReputation[node.tokens[1]] = numberAt(rep, 1);
 			}
 			else if(key === "ship" && node.tokens.length >= 2)
 				loadShipNode(ships, node, source);
@@ -209,8 +227,47 @@ export function loadGameData(dataDir: string): GameData {
 			carried.add(name);
 	for(const outfit of finishedOutfits.values())
 		outfit.plunderable = !outfit.sold && carried.has(outfit.name) && (outfit.attributes["installable"] ?? 0) >= 0;
+	// Outfits no outfitter sells yet but that an event adds to one: they become buyable once the event has fired.
+	for(const [eventName, change] of Object.entries(events))
+		for(const items of Object.values(change.sets ?? {}))
+			for(const item of items)
+			{
+				const outfit = finishedOutfits.get(item);
+				if(outfit && !outfit.sold && !outfit.soldAfter?.includes(eventName))
+					(outfit.soldAfter ??= []).push(eventName);
+			}
+
+	// Plunder sources: the governments whose fleets include a ship that carries the outfit.
+	const bySource = new Map<string, Map<string, { categories: Set<string>; ships: Set<string> }>>();
+	for(const fleet of fleets)
+		for(const shipName of fleet.ships)
+		{
+			const ship = finishedShips.get(shipName);
+			if(!ship)
+				continue;
+			for(const outfitName of Object.keys(ship.outfits))
+			{
+				if(!finishedOutfits.get(outfitName)?.plunderable)
+					continue;
+				const byGovernment = bySource.get(outfitName) ?? new Map();
+				bySource.set(outfitName, byGovernment);
+				const entry = byGovernment.get(fleet.government) ?? { categories: new Set<string>(), ships: new Set<string>() };
+				byGovernment.set(fleet.government, entry);
+				entry.categories.add(ship.category);
+				entry.ships.add(ship.model);
+			}
+		}
+	// Only outfits that a fleet ship carries can really be plundered; ones carried just by mission ships cannot.
+	for(const outfit of finishedOutfits.values())
+		if(outfit.plunderable && !bySource.has(outfit.name))
+			outfit.plunderable = false;
+	const plunder: PlunderData = { reputation: startReputation, sources: {} };
+	for(const [outfitName, byGovernment] of bySource)
+		plunder.sources[outfitName] = [...byGovernment].sort(([a], [b]) => a.localeCompare(b)).map(([government, e]) => (
+			{ government, categories: [...e.categories].sort(), ships: [...e.ships].sort() }));
 
 	return {
+		plunder,
 		planetSources,
 		map: { systems, planetSets: Object.fromEntries(staticPlanetSets), landing: finishLanding(staticPlanetSets, planetLanding, systems, events), events: pruneEvents(events), requires: [...requires].sort() },
 		outfits: finishedOutfits,
@@ -422,7 +479,13 @@ function readEvent(node: DataNode): EventChange {
 	for(const c of node.children)
 	{
 		const name = c.tokens[1];
-		if(c.tokens[0] === "planet" && name)
+		if(c.tokens[0] === "outfitter" && name)
+		{
+			const items = c.children.map(o => o.tokens[0]);
+			if(items.length)
+				(change.sets ??= {})[name] = [...(change.sets[name] ?? []), ...items];
+		}
+		else if(c.tokens[0] === "planet" && name)
 		{
 			const ops: EventChange["planets"][string] = [];
 			for(const d of c.children)
@@ -459,7 +522,7 @@ function readEvent(node: DataNode): EventChange {
 }
 
 function pruneEvents(events: Record<string, EventChange>): Record<string, EventChange> {
-	return Object.fromEntries(Object.entries(events).filter(([, e]) => Object.keys(e.planets).length || Object.keys(e.systems).length));
+	return Object.fromEntries(Object.entries(events).filter(([, e]) => Object.keys(e.planets).length || Object.keys(e.systems).length || e.sets));
 }
 
 function readLanding(node: DataNode, out: Map<string, Partial<Landing>>): void {
@@ -506,6 +569,8 @@ function readSystem(node: DataNode): MapSystem {
 			system.pos = [numberAt(child, 1), numberAt(child, 2)];
 		else if(child.tokens[0] === "shrouded")
 			system.shrouded = true;
+		else if(child.tokens[0] === "jump range" && child.tokens.length >= 2)
+			system.jumpRange = numberAt(child, 1);
 		else if(child.tokens[0] === "government" && child.tokens[1])
 			system.government = child.tokens[1];
 		else if(child.tokens[0] === "link" && child.tokens[1])

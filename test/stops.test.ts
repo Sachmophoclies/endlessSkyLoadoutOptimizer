@@ -77,3 +77,16 @@ test("pathFromVisible walks hyperlanes from the nearest visited, unshrouded syst
 	assert.deepEqual(pathFromVisible(chain, "C", ["A", "B"]), ["A", "B", "C"]);
 	assert.equal(pathFromVisible(chain, "C", []), null);
 });
+
+test("planets holding stored outfits are stops even when they sell nothing needed", () => {
+	const plan = planStops([{ name: "w2", count: 1, cost: 1 }], map, sets, ["Nearby", "Earth"], [{ planet: "Earth", name: "stored", count: 3 }]);
+	assert.deepEqual(plan.stops.map(s => s.system), ["Sol", "Near"]);
+	assert.deepEqual(plan.stops[0].planets[0].storage, [{ name: "stored", count: 3 }]);
+	assert.deepEqual(plan.stops[1].planets[0].items.map(i => i.name), ["w2"]);
+});
+
+test("a storage stop that also sells a needed outfit covers it", () => {
+	const plan = planStops([{ name: "w1", count: 1, cost: 1 }], map, sets, ["Earth", "Faraway"], [{ planet: "Earth", name: "stored", count: 1 }]);
+	assert.deepEqual(plan.stops.map(s => s.system), ["Sol"]);
+	assert.equal(plan.stops[0].planets[0].items[0].name, "w1");
+});

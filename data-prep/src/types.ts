@@ -45,6 +45,8 @@ export interface OutfitData {
 	sold: boolean;
 	// Not sold anywhere, but carried by ships in the game, so it can only be had by plundering them.
 	plunderable: boolean;
+	// Events that add this outfit to an outfitter; buyable once one of them has fired, though `sold` is false.
+	soldAfter?: string[];
 }
 
 export interface ShipData {
@@ -69,4 +71,17 @@ export interface OutfitterData {
 	sets: Record<string, string[]>;
 	// Set names that are attached to at least one planet or have their own location/sell conditions.
 	reachable: string[];
+}
+
+// Where a plunderable outfit comes from: the government whose fleets fly ships carrying it, and which ships.
+export interface PlunderSource {
+	government: string;
+	categories: string[];
+	ships: string[];
+}
+
+export interface PlunderData {
+	// Government -> the reputation the player starts with ("player reputation"); used when the save has none.
+	reputation: Record<string, number>;
+	sources: Record<string, PlunderSource[]>;
 }

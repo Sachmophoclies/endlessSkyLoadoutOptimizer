@@ -1,7 +1,7 @@
 // Trip planner for the shopping list: which systems to visit to buy everything with the fewest stops.
 
 export interface MapData {
-	systems: Record<string, { pos: [number, number]; links: string[]; planets: string[]; shrouded?: boolean }>;
+	systems: Record<string, { pos: [number, number]; links: string[]; planets: string[]; shrouded?: boolean; jumpRange?: number }>;
 	planetSets: Record<string, string[]>; // planet -> outfitter set names
 	landing: Record<string, Landing>; // planet -> what it takes to land (planets with an outfitter)
 	events: Record<string, EventChange>; // lasting map edits made by events
@@ -30,6 +30,7 @@ export function landablePlanets(planets: Iterable<string>, map: MapData, reputat
 export interface EventChange {
 	planets: Record<string, Array<[string, string | number | null]>>;
 	systems: Record<string, Array<[string, string]>>;
+	sets?: Record<string, string[]>;
 }
 
 // The map as the save left it: outfitters, landing rules and links changed by the events that have fired, in order.
@@ -68,6 +69,15 @@ export function applyEvents(map: MapData, fired: string[]): MapData {
 	}
 	const systems = Object.fromEntries(Object.entries(map.systems).map(([k, v]) => [k, { ...v, links: [...links.get(k)!] }]));
 	return { ...map, systems, planetSets, landing };
+}
+
+// Outfitter sets as the save left them: outfits that fired events added to each set.
+export function applyEventSets(sets: Record<string, string[]>, events: Record<string, EventChange>, fired: string[]): Record<string, string[]> {
+	const out: Record<string, string[]> = { ...sets };
+	for(const name of fired)
+		for(const [set, items] of Object.entries(events[name]?.sets ?? {}))
+			out[set] = [...new Set([...(out[set] ?? []), ...items])];
+	return out;
 }
 
 // Drops planets in shrouded systems, which the map (and its system search) never shows.
@@ -116,11 +126,18 @@ export interface Purchase {
 	cost: number; // total credits for `count` copies
 }
 
+// Outfits to collect from planetary storage.
+export interface Pickup {
+	planet: string;
+	name: string;
+	count: number;
+}
+
 export interface Stop {
 	system: string;
 	distance: number; // straight-line map distance from Sol
 	jumps: number | null; // hyperlane jumps from Sol, when the base map links the two
-	planets: Array<{ planet: string; items: Purchase[] }>;
+	planets: Array<{ planet: string; items: Purchase[]; storage: Array<{ name: string; count: number }> }>;
 }
 
 export interface TripPlan {
@@ -157,7 +174,7 @@ export function jumpsFromSol(map: MapData): Map<string, number> {
 // still missing (ties go to the one closest to Sol on the map). Then every item is bought at the closest chosen stop that sells it,
 // and stops left with nothing to buy are dropped.
 export function planStops(
-	buy: Purchase[], map: MapData, sets: Record<string, string[]>, visitedPlanets: Iterable<string>,
+	buy: Purchase[], map: MapData, sets: Record<string, string[]>, visitedPlanets: Iterable<string>, pickups: Pickup[] = [],
 ): TripPlan {
 	const jumps = jumpsFromSol(map);
 	const sol = map.systems[ORIGIN]?.pos ?? [0, 0];
@@ -190,6 +207,17 @@ export function planStops(
 	const missing = new Set([...wanted].filter(name => [...sells.values()].some(m => m.has(name))));
 	const unplaced = buy.filter(b => !missing.has(b.name));
 	const chosen: string[] = [];
+	// Planets holding your stored outfits are stops whatever they sell.
+	const systemOf = new Map(Object.entries(map.systems).flatMap(([system, data]) => data.planets.map(p => [p, system] as const)));
+	for(const pickup of pickups)
+	{
+		const system = systemOf.get(pickup.planet);
+		if(!system || chosen.includes(system))
+			continue;
+		chosen.push(system);
+		for(const name of sells.get(system)?.keys() ?? [])
+			missing.delete(name);
+	}
 	while(missing.size)
 	{
 		let best = "", bestCount = 0;
@@ -212,6 +240,15 @@ export function planStops(
 	chosen.sort(closer);
 
 	const stops = new Map<string, Stop>();
+	const stopAt = (system: string): Stop => stops.get(system) ?? stops.set(system, { system, distance: euclid(system), jumps: jumps.get(system) ?? null, planets: [] }).get(system)!;
+	const entryAt = (stop: Stop, planet: string): Stop["planets"][number] =>
+		stop.planets.find(p => p.planet === planet) ?? stop.planets[stop.planets.push({ planet, items: [], storage: [] }) - 1];
+	for(const pickup of pickups)
+	{
+		const system = systemOf.get(pickup.planet);
+		if(system)
+			entryAt(stopAt(system), pickup.planet).storage.push({ name: pickup.name, count: pickup.count });
+	}
 	for(const purchase of buy)
 	{
 		const system = chosen.find(s => sells.get(s)?.has(purchase.name));
@@ -223,9 +260,7 @@ export function planStops(
 		for(const planets of here.values())
 			planets.forEach(p => planetLoad.set(p, (planetLoad.get(p) ?? 0) + 1));
 		const planet = [...here.get(purchase.name)!].sort((a, b) => planetLoad.get(b)! - planetLoad.get(a)! || a.localeCompare(b))[0];
-		const stop = stops.get(system) ?? stops.set(system, { system, distance: euclid(system), jumps: jumps.get(system) ?? null, planets: [] }).get(system)!;
-		const entry = stop.planets.find(p => p.planet === planet) ?? stop.planets[stop.planets.push({ planet, items: [] }) - 1];
-		entry.items.push(purchase);
+		entryAt(stopAt(system), planet).items.push(purchase);
 	}
 	return { stops: [...stops.values()].sort((a, b) => closer(a.system, b.system)), unplaced };
 }

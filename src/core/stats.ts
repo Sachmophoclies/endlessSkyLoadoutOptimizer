@@ -126,6 +126,7 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 	stats[IDX.missileDefence] = missileDefence;
 	stats[IDX.heatTolerance] = Math.max(0, heatBudget);
 	stats[IDX.energyReserve] = A("energy capacity") + Math.max(0, surplus) * 10;
+	stats[IDX.energyGeneration] = Math.max(0, surplus);
 
 	// Movement (Ship::TurnRate / Acceleration / MaxVelocity / Drag).
 	const inertial = mass / (1 + A("inertia reduction"));

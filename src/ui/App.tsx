@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { OutfitData } from "../../data-prep/src/types.ts";
+import type { OutfitData, PlunderData } from "../../data-prep/src/types.ts";
+import { plunderRaces } from "../core/plunder.ts";
 import {
 	type Advanced, type Constraints, DEFAULT_ADVANCED, DEFAULT_CONSTRAINTS, DEFAULT_WEIGHTS,
 	STAT_KEYS, STAT_LABELS, type StatKey, type Weights,
@@ -8,7 +9,7 @@ import { type Built, buildProblem, unsatisfiable } from "../core/problem.ts";
 import { defaultSources, isGameSource, obtainableOutfits, sourceAccess } from "../core/sources.ts";
 import { resaleList, shoppingList } from "../core/shopping.ts";
 import { DEFAULT_JUMP_RANGE, planTrip } from "../core/route.ts";
-import { type MapData, applyEvents, landablePlanets, pathFromVisible, planStops, unshroudedPlanets } from "../core/stops.ts";
+import { type MapData, applyEventSets, applyEvents, landablePlanets, pathFromVisible, planStops, unshroudedPlanets } from "../core/stops.ts";
 import { evaluate } from "../core/stats.ts";
 import { DEFAULT_GA, type GAOutcome, type GAParams, type Progress, runSearch } from "../ga/ga.ts";
 import { type Limits, computeLimits } from "../ga/limits.ts";
@@ -97,9 +98,6 @@ const CONSTRAINT_LABELS: Array<[keyof Constraints, string, boolean?, string?]> =
 		"Any other weapon leaves projectiles in flight that still land after the trigger is released, and they can destroy an enemy you meant to disable or capture."],
 	["noAmmo", "Do not use ammunition", false,
 		"Leaves out weapons that spend ammunition, such as missiles and torpedoes. They stop working when the ammo runs out and have to be restocked."],
-	["plunder", "Include plunderable outfits", false,
-		"Allows outfits that no outfitter sells and that you can only get by plundering enemy ships, such as many Korath and Quarg outfits. " +
-		"They are assumed to be available in any number, with no license needed. Off: only outfits you own or can buy count."],
 	["positiveEnergy", "Ignore energy when firing", true,
 		"Unticked: a loadout is rejected if its generators and batteries cannot power every weapon firing at once (batteries are counted for about 30 seconds). " +
 		"Ticked: such loadouts are allowed, but their offence is reduced to what the energy can support."],
@@ -150,7 +148,10 @@ export function App() {
 	const [keepId, setKeepId] = useState("");
 	const [convertId, setConvertId] = useState("");
 	const [baseMap, setMapData] = useState<MapData | null>(null);
-	const [outfitSets, setOutfitSets] = useState<Record<string, string[]> | null>(null);
+	const [baseSets, setOutfitSets] = useState<Record<string, string[]> | null>(null);
+	const [plunderData, setPlunderData] = useState<PlunderData | null>(null);
+	// Outfitter sets as the save left them: events that fired add outfits to some of them.
+	const outfitSets = useMemo(() => (baseSets && baseMap && save ? applyEventSets(baseSets, baseMap.events, save.events) : baseSets), [baseSets, baseMap, save]);
 	const mapData = useMemo(() => (baseMap && save ? applyEvents(baseMap, save.events) : baseMap), [baseMap, save]);
 	const stop = useRef(false);
 	const [limits, setLimits] = useState<{ key: string; limits: Limits } | null>(null);
@@ -163,6 +164,7 @@ export function App() {
 				.catch(e => setError(`Could not load game data: ${e}`));
 		};
 		load<MapData>("map.json", setMapData);
+		load<PlunderData>("plunder.json", setPlunderData);
 		load<{ sets: Record<string, string[]> }>("outfitters.json", o => setOutfitSets(o.sets));
 	}, []);
 	useEffect(() => {
@@ -238,14 +240,14 @@ export function App() {
 
 	// The advanced sliders show where the current loadout stands for the selected group. The limits depend on the pool and
 	// non-negotiables, not on the weights, so they are recomputed only when those change.
-	const limitsKey = group ? JSON.stringify([group.id, [...sources].sort(), constraints, adv, !!save]) : "";
+	const limitsKey = group ? JSON.stringify([group.id, [...sources].sort(), constraints, adv, !!save, !!plunderData]) : "";
 	useEffect(() => {
 		if(mode !== "advanced" || !group || !save || !outfits.length || running || limits?.key === limitsKey)
 			return;
 		let cancelled = false;
 		let pool: ReturnType<typeof createPool> | null = null;
 		const timer = setTimeout(async () => {
-			const built = buildProblem({ group, save, outfits, sources, weights: DEFAULT_WEIGHTS, constraints, adv });
+			const built = buildProblem({ group, save, outfits, sources, weights: DEFAULT_WEIGHTS, constraints, adv, plunder: plunderData });
 			if(unsatisfiable(built.problem).length)
 				return;
 			setLimitsBusy(true);
@@ -285,7 +287,7 @@ export function App() {
 		setLoaded("");
 		const activeWeights = mode === "advanced" ? weights : expandSimple(mode === "simple" ? ARCHETYPES[archetype] : simple);
 		const activeAdv = mode === "advanced" ? adv : DEFAULT_ADVANCED;
-		const built = buildProblem({ group, save, outfits, sources, weights: activeWeights, constraints, adv: activeAdv });
+		const built = buildProblem({ group, save, outfits, sources, weights: activeWeights, constraints, adv: activeAdv, plunder: plunderData });
 		const blocked = unsatisfiable(built.problem);
 		if(blocked.length)
 		{
@@ -352,8 +354,9 @@ export function App() {
 			if(!target)
 				throw new Error(`this save has no ${saved.model} group with that loadout`);
 			const built = buildProblem({
-				group: target, save, outfits, sources: new Set(saved.sources),
-				weights: { ...DEFAULT_WEIGHTS, ...saved.weights }, constraints: { ...DEFAULT_CONSTRAINTS, ...saved.constraints },
+				group: target, save, outfits, sources: new Set(saved.sources), plunder: plunderData,
+				// Loadouts saved before the three-way setting stored plunder as a yes/no.
+				weights: { ...DEFAULT_WEIGHTS, ...saved.weights }, constraints: { ...DEFAULT_CONSTRAINTS, ...saved.constraints, plunder: (saved.constraints as { plunder?: unknown }).plunder === true ? "all" : ["aggressive", "all"].includes((saved.constraints as { plunder?: string }).plunder ?? "") ? (saved.constraints as { plunder: Constraints["plunder"] }).plunder : "none" },
 				adv: { ...DEFAULT_ADVANCED, ...saved.adv },
 			});
 			const genome = new Int16Array(built.problem.pool.length);
@@ -384,9 +387,10 @@ export function App() {
 			return;
 		const allSources = outfits.map(o => o.source).filter(isGameSource);
 		const built = buildProblem({
+			plunder: plunderData,
 			group: target, save, outfits, sources: new Set(allSources),
 			weights: mode === "advanced" ? weights : expandSimple(mode === "simple" ? ARCHETYPES[archetype] : simple),
-			constraints: { ...DEFAULT_CONSTRAINTS, instantaneousOnly: false, noAmmo: false, ignoreLicenses: true, plunder: true, ownedLimits: false },
+			constraints: { ...DEFAULT_CONSTRAINTS, instantaneousOnly: false, noAmmo: false, ignoreLicenses: true, plunder: "all", ownedLimits: false },
 			adv: mode === "advanced" ? adv : DEFAULT_ADVANCED,
 		});
 		built.problem.constraints = constraints;
@@ -505,6 +509,14 @@ export function App() {
 								<Info text={ATTRIBUTE_INFO} />
 							</label>
 						))}
+						<div className="muted">Plunderable outfits:</div>
+						{([["none", "None"], ["aggressive", "Aggressive sources only"], ["all", "All"]] as const).map(([value, label]) => (
+							<label key={value}>
+								<input type="radio" name="plunder" checked={constraints.plunder === value} onChange={() => setConstraints(c => ({ ...c, plunder: value }))} />
+								<span>{label}</span>
+								{value === "aggressive" && <Info text="Only outfits carried by ships of a government that is already hostile to you, so you can take them without making a new enemy. Outfits whose source is not a fleet (mission rewards and the like) are left out." />}
+							</label>
+						))}
 						<details>
 							<summary>Advanced</summary>
 							{(["minFuel", "minCargo", "minBunks"] as const).map(key => (
@@ -610,7 +622,7 @@ export function App() {
 					</>}
 				</div>
 
-				{result && save && group && result.groupId === group.id && <Results result={result} save={save} group={group} outfits={outfits} map={mapData} outfitSets={outfitSets} />}
+				{result && save && group && result.groupId === group.id && <Results result={result} save={save} group={group} outfits={outfits} map={mapData} outfitSets={outfitSets} plunder={plunderData} />}
 			</div>
 		</div>
 	);
@@ -629,7 +641,8 @@ interface SavedLoadout {
 	sources: string[];
 }
 
-function Results({ result, save, group, outfits, map, outfitSets }: {
+function Results({ result, save, group, outfits, map, outfitSets, plunder }: {
+	plunder: PlunderData | null;
 	result: { built: Built; outcome: GAOutcome };
 	save: SaveData;
 	group: NonNullable<SaveData["groups"][number]>;
@@ -641,13 +654,14 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 	const problem = built.problem;
 	const pick = outcome.best;
 	const base = useMemo(() => evaluate(problem, built.baseline), [built]);
-	const buyable = useMemo(() => new Set(outfits.filter(o => o.sold).map(o => o.name)), [outfits]);
+	const buyable = useMemo(() => new Set(outfits.filter(o => o.sold || o.soldAfter?.some(e => save.events.includes(e))).map(o => o.name)), [outfits, save]);
 	const lines = useMemo(() => shoppingList(problem, pick.genome, group, save, buyable), [pick]);
 	const trip = useMemo(() => {
 		if(!map || !outfitSets)
 			return null;
 		const buy = lines.filter(l => l.toBuy > 0).map(l => ({ name: l.name, count: l.toBuy, cost: l.buyCost }));
-		return buy.length ? planStops(buy, map, outfitSets, (visited => problem.constraints.includeShrouded ? visited : unshroudedPlanets(visited, map))(landablePlanets(save.visitedPlanets, map, save.reputation))) : null;
+		const pickups = lines.flatMap(l => l.fromStorage.map(st => ({ planet: st.planet, name: l.name, count: st.count })));
+		return buy.length || pickups.length ? planStops(buy, map, outfitSets, (visited => problem.constraints.includeShrouded ? visited : unshroudedPlanets(visited, map))(landablePlanets(save.visitedPlanets, map, save.reputation)), pickups) : null;
 	}, [lines, map, outfitSets, save]);
 	// Route from where the pilot is now. A jump drive in the new loadout also allows hops to unlinked systems in range.
 	const route = useMemo(() => {
@@ -676,6 +690,8 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 		};
 		return [...trip.stops].sort((a, b) => rank(a.system) - rank(b.system));
 	}, [trip, route]);
+	// Outfits the new loadout needs that only plundering can supply, and whose ships carry them.
+	const toPlunder = useMemo(() => lines.filter(l => l.plunderShort > 0).map(l => ({ name: l.name, count: l.plunderShort, races: plunderRaces(l.name, save.reputation, plunder) })), [lines, plunder]);
 	const diff = problem.pool.map((p, i) => ({ name: p.name, from: built.baseline[i], to: pick.genome[i] })).filter(d => d.from !== d.to)
 		.sort((a, b) => Number(a.to > a.from) - Number(b.to > b.from) || a.name.localeCompare(b.name));
 	const resale = useMemo(() => resaleList(problem, pick.genome, group, save), [pick]);
@@ -734,19 +750,35 @@ function Results({ result, save, group, outfits, map, outfitSets }: {
 					Purchase {totalBuy.toLocaleString()} cr − resale {totalResale.toLocaleString()} cr = <strong>{net.toLocaleString()} credits net</strong>
 				</p>}
 			</Fold>
-			{trip && <div className="card">
+			{(trip || toPlunder.length > 0) && <div className="card">
 				<h2>Where to buy</h2>
-				<div className="muted">Fewest stops using planets you have visited, in shopping-trip order.</div>
+				{trip && <div className="muted">Fewest stops using planets you have visited, in shopping-trip order.</div>}
 				{orderedStops.flatMap(stop => stop.planets.map(p => (
 					<div key={`${stop.system}/${p.planet}`}>
 						<h3>{stop.system} - {p.planet} <CopyButton text={stop.system} /></h3>
 						{shroudedPaths.has(stop.system) && <div className="muted">Shrouded{shroudedPaths.get(stop.system) ? `: ${shroudedPaths.get(stop.system)!.join(" > ")}` : ""}</div>}
 						<table>
-							<tbody>{p.items.map(i => <tr key={i.name}><td>{i.name}</td><td className="num">{i.count}</td><td className="num">{i.cost.toLocaleString()} cr</td></tr>)}</tbody>
+							<tbody>
+								{p.storage.map(i => <tr key={`s/${i.name}`}><td>{i.name}</td><td className="num">{i.count}</td><td className="num muted">from storage</td></tr>)}
+								{p.items.map(i => <tr key={i.name}><td>{i.name}</td><td className="num">{i.count}</td><td className="num">{i.cost.toLocaleString()} cr</td></tr>)}
+							</tbody>
 						</table>
 					</div>
 				)))}
-				{trip.unplaced.length > 0 && <div>
+				{toPlunder.length > 0 && <div>
+					<h3>Plunder</h3>
+					<table>
+						<thead><tr><th>Outfit</th><th className="num">Count</th><th>Race</th><th>Ships</th></tr></thead>
+						<tbody>{toPlunder.flatMap(p => p.races.length ? p.races.map((r, k) => (
+							<tr key={`${p.name}/${r.race}`}>
+								<td>{k === 0 ? p.name : ""}</td><td className="num">{k === 0 ? p.count : ""}</td>
+								<td className={r.hostile ? "down" : undefined}>{r.race}{r.hostile ? " (hostile)" : ""}</td>
+								<td title={r.ships.join(", ")}>{r.categories.join(", ")}</td>
+							</tr>
+						)) : [<tr key={p.name}><td>{p.name}</td><td className="num">{p.count}</td><td colSpan={2} className="muted">not carried by any fleet ship</td></tr>])}</tbody>
+					</table>
+				</div>}
+				{trip && trip.unplaced.length > 0 && <div>
 					<h3>Not sold on a planet you have visited</h3>
 					<table><tbody>{trip.unplaced.map(i => <tr key={i.name}><td>{i.name}</td><td className="num">{i.count}</td></tr>)}</tbody></table>
 				</div>}
