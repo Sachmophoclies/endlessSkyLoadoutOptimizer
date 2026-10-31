@@ -243,12 +243,13 @@ export function App() {
 		if(mode !== "advanced" || !group || !save || !outfits.length || running || limits?.key === limitsKey)
 			return;
 		let cancelled = false;
+		let pool: ReturnType<typeof createPool> | null = null;
 		const timer = setTimeout(async () => {
 			const built = buildProblem({ group, save, outfits, sources, weights: DEFAULT_WEIGHTS, constraints, adv });
 			if(unsatisfiable(built.problem).length)
 				return;
 			setLimitsBusy(true);
-			const pool = createPool(built.problem, workers);
+			pool = createPool(built.problem, workers);
 			try {
 				const out = await computeLimits(built.problem, built.baseline, built.ownedPerShip, pool.evaluate, () => cancelled, () => {});
 				if(out && !cancelled)
@@ -256,12 +257,13 @@ export function App() {
 			} catch {
 				// carets are optional; leave them off if the calculation fails
 			} finally {
-				pool.close();
+				pool?.close();
 				if(!cancelled)
 					setLimitsBusy(false);
 			}
 		}, 400);
-		return () => { cancelled = true; clearTimeout(timer); setLimitsBusy(false); };
+		// Starting a search (or changing anything the limits depend on) ends the calculation at once: the workers are terminated.
+		return () => { cancelled = true; clearTimeout(timer); pool?.close(); setLimitsBusy(false); };
 	}, [mode, limitsKey, running, outfits.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const caretFor = (k: StatKey): { marker: number | null; hint?: string } => {
