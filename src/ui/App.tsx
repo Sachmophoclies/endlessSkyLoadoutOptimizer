@@ -11,10 +11,29 @@ import { DEFAULT_JUMP_RANGE, planTrip } from "../core/route.ts";
 import { type MapData, applyEvents, landablePlanets, pathFromVisible, planStops, unshroudedPlanets } from "../core/stops.ts";
 import { evaluate } from "../core/stats.ts";
 import { DEFAULT_GA, type GAOutcome, type GAParams, type Progress, runSearch } from "../ga/ga.ts";
+import { type Limits, computeLimits } from "../ga/limits.ts";
 import { createPool } from "../ga/pool.ts";
 import { type SaveData, parseSave } from "../save/parseSave.ts";
 import { Chart } from "./Chart.tsx";
 import { ProgressBar } from "./ProgressBar.tsx";
+// marker: where the current loadout sits on this stat, 0 (cheapest valid loadout) to 1 (best this ship can reach); a caret above the track.
+function SliderRow(p: { label: string; min: number; max: number; step: number; value: number; onChange: (v: number) => void; marker?: number | null; hint?: string }) {
+	const set = (v: number): void => p.onChange(Math.min(p.max, Math.max(p.min, Number((Math.round(v / p.step) * p.step).toFixed(4)))));
+	return (
+		<div className="slider" title={p.hint}>
+			<span>{p.label}</span>
+			<div className="track">
+				<input type="range" min={p.min} max={p.max} step={p.step} value={p.value} onChange={e => set(Number(e.target.value))} />
+				{p.marker != null && <span className="caret" style={{ left: `calc(7px + (100% - 14px) * ${p.marker})` }} />}
+			</div>
+			<button onClick={() => set(p.value - p.step)} disabled={p.value <= p.min} aria-label="Decrease">−</button>
+			<input type="number" min={p.min} max={p.max} step={p.step} value={p.value}
+				onChange={e => e.target.value !== "" && Number.isFinite(Number(e.target.value)) && set(Number(e.target.value))} />
+			<button onClick={() => set(p.value + p.step)} disabled={p.value >= p.max} aria-label="Increase">+</button>
+		</div>
+	);
+}
+
 // Simple mode picks an archetype, intermediate mode sets its four sliders, advanced mode edits every weight directly.
 // The modes are mutually exclusive: only the active one feeds the search.
 interface Simple { offence: number; defence: number; manoeuvre: number; logistics: number; crew?: number }
@@ -44,7 +63,20 @@ const BULK_TRADER = {
 	},
 	"Max carry": { cargo: 100, shieldRegen: 5, jumps: 20, fuelCapacity: 20 },
 } satisfies Record<string, Partial<Weights>>;
-type Trader = keyof typeof BULK_TRADER;
+
+// Boarder, also Advanced-only in this form: spare crew first, then how much of the ship goes to surviving the approach.
+const BOARDER = {
+	"Defensive": {
+		spareCrew: 50, shieldRegen: 40, hullRepair: 25, shieldProtection: 25, hullProtection: 25, missileDefence: 30,
+		offence: 15, turning: 10, thrust: 10, jumps: 10, fuelCapacity: 5,
+	},
+	"Balanced": {
+		spareCrew: 70, offence: 30, shieldRegen: 30, hullRepair: 15, shieldProtection: 10, hullProtection: 10, missileDefence: 20,
+		turning: 15, thrust: 15, maxSpeed: 10, jumps: 10, fuelCapacity: 5,
+	},
+	"Max Troops": { spareCrew: 100, shieldRegen: 5, jumps: 10, fuelCapacity: 5 },
+} satisfies Record<string, Partial<Weights>>;
+const FAMILIES = { "Bulk Trader": BULK_TRADER, "Boarder": BOARDER } as Record<string, Record<string, Partial<Weights>>>;
 
 function expandSimple(s: Simple): Weights {
 	return {
@@ -103,7 +135,8 @@ export function App() {
 	const [sources, setSources] = useState<Set<string>>(new Set());
 	const [mode, setMode] = useState<"simple" | "intermediate" | "advanced">("simple");
 	const [archetype, setArchetype] = useState<Archetype>("Balanced");
-	const [trader, setTrader] = useState<Trader | null>(null); // the Bulk Trader variant in Advanced; null while that row is closed
+	const [family, setFamily] = useState("Bulk Trader"); // which variant row Advanced shows
+	const [trader, setTrader] = useState<string | null>(null); // the selected variant; null while that row is closed
 	const [simple, setSimple] = useState<Simple>(DEFAULT_SIMPLE);
 	const [weights, setWeights] = useState<Weights>(DEFAULT_WEIGHTS);
 	const [constraints, setConstraints] = useState<Constraints>(DEFAULT_CONSTRAINTS);
@@ -120,6 +153,8 @@ export function App() {
 	const [outfitSets, setOutfitSets] = useState<Record<string, string[]> | null>(null);
 	const mapData = useMemo(() => (baseMap && save ? applyEvents(baseMap, save.events) : baseMap), [baseMap, save]);
 	const stop = useRef(false);
+	const [limits, setLimits] = useState<{ key: string; limits: Limits } | null>(null);
+	const [limitsBusy, setLimitsBusy] = useState(false);
 	useEffect(() => {
 		const load = <T,>(file: string, set: (value: T) => void): void => {
 			fetch(`${import.meta.env.BASE_URL}data/${file}`)
@@ -200,6 +235,43 @@ export function App() {
 			setError(`Could not read save: ${e instanceof Error ? e.message : e}`);
 		}
 	}
+
+	// The advanced sliders show where the current loadout stands for the selected group. The limits depend on the pool and
+	// non-negotiables, not on the weights, so they are recomputed only when those change.
+	const limitsKey = group ? JSON.stringify([group.id, [...sources].sort(), constraints, adv, !!save]) : "";
+	useEffect(() => {
+		if(mode !== "advanced" || !group || !save || !outfits.length || running || limits?.key === limitsKey)
+			return;
+		let cancelled = false;
+		const timer = setTimeout(async () => {
+			const built = buildProblem({ group, save, outfits, sources, weights: DEFAULT_WEIGHTS, constraints, adv });
+			if(unsatisfiable(built.problem).length)
+				return;
+			setLimitsBusy(true);
+			const pool = createPool(built.problem, workers);
+			try {
+				const out = await computeLimits(built.problem, built.baseline, built.ownedPerShip, pool.evaluate, () => cancelled, () => {});
+				if(out && !cancelled)
+					setLimits({ key: limitsKey, limits: out });
+			} catch {
+				// carets are optional; leave them off if the calculation fails
+			} finally {
+				pool.close();
+				if(!cancelled)
+					setLimitsBusy(false);
+			}
+		}, 400);
+		return () => { cancelled = true; clearTimeout(timer); setLimitsBusy(false); };
+	}, [mode, limitsKey, running, outfits.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	const caretFor = (k: StatKey): { marker: number | null; hint?: string } => {
+		const l = limits?.key === limitsKey ? limits.limits : null;
+		const i = STAT_KEYS.indexOf(k);
+		if(!l || k === "cost" || !(l.ceiling[i] > l.floor[i]))
+			return { marker: null };
+		const marker = Math.max(0, Math.min(1, (l.current[i] - l.floor[i]) / (l.ceiling[i] - l.floor[i])));
+		return { marker, hint: `Current ${fmt(l.current[i])} (cheapest valid ${fmt(l.floor[i])}, best possible ${fmt(l.ceiling[i])})` };
+	};
 
 	async function run() {
 		if(!group || !save)
@@ -447,7 +519,7 @@ export function App() {
 
 			<div className="col">
 				<div className="card">
-					<h2>Weights</h2>
+					<h2>Weights{limitsBusy && mode === "advanced" && <span className="busy" role="status"><span className="spinner" />Rating current loadout…</span>}</h2>
 					<div className="tabs">
 						<button aria-pressed={mode === "simple"} onClick={() => setMode("simple")}>Simple</button>
 						<button aria-pressed={mode === "intermediate"} onClick={() => setMode("intermediate")}>Intermediate</button>
@@ -459,55 +531,45 @@ export function App() {
 							<span>{name}</span>
 						</label>
 					)) : mode === "intermediate" ? <>
-						{([["offence", "Offence"], ["defence", "Defence (regen, protection, anti-missile)"], ["manoeuvre", "Maneuverability (turning, thrust, speed)"], ["logistics", "Logistics (fuel capacity, fuel regen, jumps, cargo)"]] as const).map(([k, label]) => (
-							<div className="slider" key={k}>
-								<span>{label}</span>
-								<input type="range" min={0} max={100} value={simple[k]} onChange={e => setSimple(s => ({ ...s, [k]: Number(e.target.value) }))} />
-								<span className="muted">{simple[k]}</span>
-							</div>
-						))}
+						<div className="sliders">{([["offence", "Offence"], ["defence", "Defence (regen, protection, anti-missile)"], ["manoeuvre", "Maneuverability (turning, thrust, speed)"], ["logistics", "Logistics (fuel capacity, fuel regen, jumps, cargo)"]] as const).map(([k, label]) => (
+							<SliderRow key={k} label={label} min={0} max={100} step={1} value={simple[k]} onChange={v => setSimple(s => ({ ...s, [k]: v }))} />
+						))}</div>
 					</> : <>
 					<div className="tabs">
-						{(Object.keys(ARCHETYPES) as Archetype[]).map(name => (
+						{(Object.keys(ARCHETYPES) as Archetype[]).filter(name => !(name in FAMILIES)).map(name => (
 							<button key={name} onClick={() => { setTrader(null); setWeights(expandSimple(ARCHETYPES[name])); }}>{name}</button>
 						))}
-						<button aria-pressed={trader !== null} onClick={() => { setTrader("Balanced"); setWeights({ ...ZERO, cost: 10, ...BULK_TRADER.Balanced }); }}>Bulk Trader</button>
-						<button onClick={() => { setTrader(null); setWeights(ZERO); }}>Reset</button>
+						{["Boarder", "Bulk Trader"].map(name => (
+							<button key={name} aria-pressed={trader !== null && family === name}
+								onClick={() => { setFamily(name); setTrader("Balanced"); setWeights({ ...ZERO, cost: 10, ...FAMILIES[name].Balanced }); }}>{name}</button>
+						))}
+						<button onClick={() => { setTrader(null); setWeights(Object.fromEntries(STAT_KEYS.map(k => [k, Math.round((caretFor(k).marker ?? 0) * 100)])) as Weights); }}>Reset</button>
 					</div>
 					<div className={`slide${trader ? " open" : ""}`}>
 						<div className="tabs">
-							{(Object.keys(BULK_TRADER) as Trader[]).map(name => (
+							{Object.keys(FAMILIES[family]).map(name => (
 								<button key={name} aria-pressed={trader === name} tabIndex={trader ? 0 : -1}
-									onClick={() => { setTrader(name); setWeights({ ...ZERO, cost: 10, ...BULK_TRADER[name] }); }}>{name}</button>
+									onClick={() => { setTrader(name); setWeights({ ...ZERO, cost: 10, ...FAMILIES[family][name] }); }}>{name}</button>
 							))}
 						</div>
 					</div>
-					{STAT_KEYS.map(k => (
-						<div className="slider" key={k}>
-							<span>{STAT_LABELS[k]}{k === "cost" ? " (penalty)" : ""}</span>
-							<input type="range" min={0} max={100} value={weights[k]} onChange={e => setWeight(k, Number(e.target.value))} />
-							<span className="muted">{weights[k]}</span>
-						</div>
-					))}
+					<div className="sliders">
+						{STAT_KEYS.map(k => (
+							<SliderRow key={k} label={STAT_LABELS[k] + (k === "cost" ? " (penalty)" : "")} min={0} max={100} step={1}
+								value={weights[k]} onChange={v => setWeight(k, v)} {...caretFor(k)} />
+						))}
+					</div>
 					<details className="fold" style={{ paddingTop: 12 }}>
 						<summary><h2>Status damage and model options</h2></summary>
 						<div className="muted">Status damage weights, applied to each channel's per-second value (game value x100) inside offence.</div>
-						{(["ion", "disruption", "slowing", "scrambling"] as const).map(k => (
-							<div className="slider" key={k}>
-								<span>{k} damage</span>
-								<input type="range" min={0} max={5} step={0.1} value={adv[k]} onChange={e => setAdv(a => ({ ...a, [k]: Number(e.target.value) }))} />
-								<span className="muted">{adv[k]}</span>
-							</div>
-						))}
-						<div className="slider"><span>Movement duty (energy/heat budget)</span>
-							<input type="range" min={0} max={1} step={0.05} value={adv.moveDuty} onChange={e => setAdv(a => ({ ...a, moveDuty: Number(e.target.value) }))} />
-							<span className="muted">{adv.moveDuty}</span></div>
-						<div className="slider"><span>Ammo must last (s)</span>
-							<input type="range" min={5} max={300} step={5} value={adv.ammoHorizon} onChange={e => setAdv(a => ({ ...a, ammoHorizon: Number(e.target.value) }))} />
-							<span className="muted">{adv.ammoHorizon}</span></div>
-						<div className="slider"><span>Battery covers deficit (s)</span>
-							<input type="range" min={5} max={120} step={5} value={adv.batteryHorizon} onChange={e => setAdv(a => ({ ...a, batteryHorizon: Number(e.target.value) }))} />
-							<span className="muted">{adv.batteryHorizon}</span></div>
+						<div className="sliders">
+							{(["ion", "disruption", "slowing", "scrambling"] as const).map(k => (
+								<SliderRow key={k} label={`${k} damage`} min={0} max={5} step={0.1} value={adv[k]} onChange={v => setAdv(x => ({ ...x, [k]: v }))} />
+							))}
+							<SliderRow label="Movement duty (energy/heat budget)" min={0} max={1} step={0.05} value={adv.moveDuty} onChange={v => setAdv(x => ({ ...x, moveDuty: v }))} />
+							<SliderRow label="Ammo must last (s)" min={5} max={300} step={5} value={adv.ammoHorizon} onChange={v => setAdv(x => ({ ...x, ammoHorizon: v }))} />
+							<SliderRow label="Battery covers deficit (s)" min={5} max={120} step={5} value={adv.batteryHorizon} onChange={v => setAdv(x => ({ ...x, batteryHorizon: v }))} />
+						</div>
 					</details>
 					</>}
 				</div>

@@ -9,6 +9,7 @@ export interface GAParams {
 	topN: number;
 	stagnation: number; // stop after this many generations without improvement
 	runs: number; // independent searches with different seeds; the best result is kept
+	cap?: number; // largest ratio to the current loadout a stat can earn; default 1.5, Infinity for raw limits
 }
 
 export const DEFAULT_GA: GAParams = { population: 500, generations: 300, mutationRate: 2, seed: 1, topN: 1, stagnation: 80, runs: 4 };
@@ -54,8 +55,10 @@ export class Scorer {
 	readonly hi = new Float64Array(STAT_KEYS.length).fill(1e-9);
 	private ref: Float64Array | null = null;
 	private problem: Problem;
-	constructor(problem: Problem) {
+	private cap: number;
+	constructor(problem: Problem, cap = 1.5) {
 		this.problem = problem;
+		this.cap = cap;
 	}
 
 	// The first result is the current loadout; its stats are the reference even if it breaks a constraint.
@@ -83,7 +86,7 @@ export class Scorer {
 			if(!weight)
 				continue;
 			const scale = this.ref && this.ref[k] > 0 ? this.ref[k] : this.hi[k];
-			const norm = Math.max(0, Math.min(1.5, r.stats[k] / scale));
+			const norm = Math.max(0, Math.min(this.cap, r.stats[k] / scale));
 			total += weight;
 			sum += (STAT_KEYS[k] === "cost" ? -1 : 1) * weight * norm;
 		}
@@ -100,7 +103,7 @@ export async function runGA(
 	const n = pool.length;
 	const maxOf = pool.map((p, i) => Math.min(p.max, ownedPerShip[i] ?? p.max));
 	const usable = maxOf.map((m, i) => (m > 0 ? i : -1)).filter(i => i >= 0);
-	const scorer = new Scorer(problem);
+	const scorer = new Scorer(problem, params.cap);
 
 	const used = new Float64Array(problem.capKeys.length);
 	const recompute = (g: Genome): void => {
@@ -371,7 +374,7 @@ export async function runSearch(
 			p => { latest[k] = p; report(); }, shouldStop).finally(() => { finished[k] = true; })));
 
 	// One scorer for everyone, referenced to the current loadout, so the runs' winners are comparable.
-	const scorer = new Scorer(problem);
+	const scorer = new Scorer(problem, params.cap);
 	scorer.setReference((await evaluate([baseline]))[0]);
 	const finalists = outcomes.map(o => o.best);
 	scorer.observe(finalists.map(f => f.result));

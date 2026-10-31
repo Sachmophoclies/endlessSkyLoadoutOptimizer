@@ -2,9 +2,12 @@ import type { OutfitData } from "../../data-prep/src/types.ts";
 import type { SaveData, ShipGroup } from "../save/parseSave.ts";
 import type { Advanced, Constraints, Genome, PoolItem, Problem, Weights } from "./model.ts";
 
-// Attributes that bound what can be installed. Only negative contributions count as "costs".
-const CAP_RE = /(capacity|space|ports|mounts|connection point)$/;
-const NOT_CAP = new Set(["energy capacity", "fuel capacity", "heat capacity", "cargo space"]);
+// Outfit::CanAdd: every attribute stays at or above 0 unless it has a minimum override (MINIMUM_OVERRIDES in Outfit.cpp).
+// A negative contribution to any other attribute is therefore a cost drawn from what the hull and other outfits provide.
+const FREE_PREFIX = /^(shield|hull|fuel|thrusting|turning|reverse thrusting|afterburner) (energy|fuel|heat|shields|hull|threshold|discharge|corrosion|ion|leakage|burn|disruption|slowing)$/;
+const FREE_SUFFIX = /^(cooling energy|(discharge|corrosion|ion|scramble|leak|burn|disruption|slowing) resistance (energy|fuel|heat))$/;
+const FREE_BOUNDED = /( protection| multiplier)$|^(drag|inertia) reduction$/; // minimum below 0 (-0.99 or -1), not a shared resource
+const FREE = new Set(["energy generation", "energy consumption", "fuel generation", "fuel consumption", "fuel energy", "fuel heat", "heat generation", "flotsam chance"]);
 const HULL_KEYS = ["outfit space", "weapon capacity", "engine capacity", "gun ports", "turret mounts"];
 const MAX_UNBOUNDED = 500; // ammo and similar items bounded only by capacity providers
 
@@ -25,7 +28,7 @@ export interface Built {
 	shipCount: number;
 }
 
-const isCap = (key: string, value: number): boolean => value < 0 && CAP_RE.test(key) && !NOT_CAP.has(key);
+const isCap = (key: string, value: number): boolean => value < 0 && !FREE.has(key) && !FREE_BOUNDED.test(key) && !FREE_PREFIX.test(key) && !FREE_SUFFIX.test(key);
 
 export function buildProblem(o: BuildOptions): Built {
 	const { group, save, constraints: con } = o;
