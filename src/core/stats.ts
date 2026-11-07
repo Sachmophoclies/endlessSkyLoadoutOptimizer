@@ -1,4 +1,4 @@
-import { type EvalResult, type Genome, type Problem, STAT_KEYS } from "./model.ts";
+import { type Constraints, type EvalResult, type Genome, type Problem, STAT_KEYS, attributeMet } from "./model.ts";
 
 // Formulas follow source/Ship.cpp and source/ship/ShipAttributeCache.cpp.
 // Rates: the game runs at 60 frames per second; per-frame attribute values are multiplied by FPS.
@@ -27,6 +27,18 @@ export function totals(problem: Problem, g: ArrayLike<number>): { tot: Record<st
 			tot[key] = (tot[key] ?? 0) + item.attrs[key] * c;
 	}
 	return { tot, mass };
+}
+
+// Where each must-contain outfit sits in the pool (-1 when it is not there), looked up once per problem and list.
+const indexCache = new WeakMap<Problem, { list: Constraints["mustContain"]; index: number[] }>();
+function requiredIndexes(problem: Problem): number[] {
+	const list = problem.constraints.mustContain;
+	const cached = indexCache.get(problem);
+	if(cached?.list === list)
+		return cached.index;
+	const index = list.map(r => (r.kind === "outfit" ? problem.pool.findIndex(p => p.name === r.name) : -1));
+	indexCache.set(problem, { list, index });
+	return index;
 }
 
 export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
@@ -121,12 +133,11 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 	stats[IDX.hullRepair] = FPS * (A("hull repair rate") + A("delayed hull repair rate")) * (1 + A("hull repair multiplier"))
 		+ HEAL_TO_REGEN * healHull * fire;
 	// Incoming damage is divided by 1 + protection (Entity::Recalibrate), so this is the factor on effective HP.
-	stats[IDX.shieldProtection] = Math.max(MIN_PROTECTION, 1 + A("shield protection"));
 	stats[IDX.hullProtection] = Math.max(MIN_PROTECTION, 1 + A("hull protection"));
 	stats[IDX.missileDefence] = missileDefence;
 	stats[IDX.heatTolerance] = Math.max(0, heatBudget);
 	stats[IDX.energyReserve] = A("energy capacity") + Math.max(0, surplus) * 10;
-	stats[IDX.energyGeneration] = Math.max(0, surplus);
+	stats[IDX.energyGeneration] = FPS * (A("energy generation") + 0.5 * A("solar collection"));
 
 	// Movement (Ship::TurnRate / Acceleration / MaxVelocity / Drag).
 	const inertial = mass / (1 + A("inertia reduction"));
@@ -185,17 +196,26 @@ export function evaluate(problem: Problem, g: ArrayLike<number>): EvalResult {
 	stats[IDX.cargo] = A("cargo space");
 	stats[IDX.cost] = cost;
 
-	if(con.requireHyperdrive && !(A("hyperdrive") > 0 || A("scram drive") > 0))
+	if(con.noNegativeShieldProtection && A("shield protection") < 0)
 		violation += 1;
-	if(con.requireJumpDrive && !(A("jump drive") > 0))
-		violation += 1;
-	if(con.requireRamscoop && !(A("ramscoop") > 0))
-		violation += 1;
-	for(const attribute of con.requiredAttributes)
-		if(!(A(attribute) > 0))
-			violation += 1;
+	const outfitIndex = requiredIndexes(problem);
+	con.mustContain.forEach((r, k) => {
+		if(r.kind === "attribute")
+		{
+			if(!attributeMet(r.name, A))
+				violation += 1;
+			return;
+		}
+		const have = outfitIndex[k] >= 0 ? g[outfitIndex[k]] : 0;
+		if(have < r.count)
+			violation += (r.count - have) / r.count;
+	});
 	if(con.minFuel > 0 && A("fuel capacity") < con.minFuel)
 		violation += (con.minFuel - A("fuel capacity")) / con.minFuel;
+	// A hull that already holds more than the limit is not held to it.
+	const fuelLimit = Math.max(con.maxFuel, problem.hull["fuel capacity"] ?? 0);
+	if(con.maxFuel > 0 && A("fuel capacity") > fuelLimit)
+		violation += (A("fuel capacity") - fuelLimit) / fuelLimit;
 	if(con.minCargo > 0 && A("cargo space") < con.minCargo)
 		violation += (con.minCargo - A("cargo space")) / con.minCargo;
 	if(con.minBunks > 0 && stats[IDX.spareCrew] < con.minBunks)

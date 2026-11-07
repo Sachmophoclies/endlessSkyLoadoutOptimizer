@@ -1,7 +1,8 @@
 import type { OutfitData, PlunderData } from "../../data-prep/src/types.ts";
 import { hostileSource } from "./plunder.ts";
+import { usefulCopies } from "./dominance.ts";
 import type { SaveData, ShipGroup } from "../save/parseSave.ts";
-import type { Advanced, Constraints, Genome, PoolItem, Problem, Weights } from "./model.ts";
+import { type Advanced, type Constraints, type Genome, type PoolItem, type Problem, type Weights, attributeBans, attributeMet, requirementLabel } from "./model.ts";
 
 // Outfit::CanAdd: every attribute stays at or above 0 unless it has a minimum override (MINIMUM_OVERRIDES in Outfit.cpp).
 // A negative contribution to any other attribute is therefore a cost drawn from what the hull and other outfits provide.
@@ -14,6 +15,9 @@ const MAX_UNBOUNDED = 500; // ammo and similar items bounded only by capacity pr
 
 export interface BuildOptions {
 	plunder?: PlunderData | null;
+	// Outfits some outfitter you could land at sells right now (events replayed, landing rules applied). When given, only
+	// these can be bought; otherwise anything that is sold anywhere counts.
+	offered?: Set<string> | null;
 	group: ShipGroup;
 	save: SaveData;
 	outfits: OutfitData[];
@@ -57,7 +61,7 @@ export function buildProblem(o: BuildOptions): Built {
 
 	// Copies of an outfit can be bought, or (if allowed) plundered: not sold anywhere, no license needed.
 	const fired = new Set(save.events);
-	const buyableOf = (data: OutfitData): boolean => (data.sold || !!data.soldAfter?.some(e => fired.has(e))) && (con.ignoreLicenses || data.licenses.every(l => licensed.has(l)));
+	const buyableOf = (data: OutfitData): boolean => (o.offered ? o.offered.has(data.name) : data.sold || !!data.soldAfter?.some(e => fired.has(e))) && (con.ignoreLicenses || data.licenses.every(l => licensed.has(l)));
 	const plunderOk = (data: OutfitData): boolean => data.plunderable && (con.plunder === "all" || (con.plunder === "aggressive" && hostileSource(data.name, save.reputation, o.plunder ?? null)));
 	const obtainable = (data: OutfitData): boolean => buyableOf(data) || plunderOk(data);
 
@@ -80,16 +84,35 @@ export function buildProblem(o: BuildOptions): Built {
 			banned = true;
 		if(con.noAmmo && (w?.ammo?.usage || ammoNames.has(data.name)))
 			banned = true;
+		if(con.mustNotContain.some(r => (r.kind === "outfit" ? r.name === data.name : attributeBans(r, data.attributes))))
+			banned = true;
+		// An outfit asked for by name is used whatever the source boxes say.
+		if(con.mustContain.some(r => r.kind === "outfit" && r.name === data.name))
+			banned = false;
 		if(banned && !current)
 			continue;
+		// Hand-to-hand gear is not part of the search: what the group carries stays, and none is added.
+		if(data.category === "Hand to Hand" && !current)
+			continue;
 		// Unique outfits (the "unique" attribute: quest rewards and the like) stay exactly as the group has them.
-		if(data.attributes.unique && current > 0)
+		if((data.attributes.unique || data.category === "Hand to Hand") && current > 0)
 		{
 			candidates.push({ data, max: current, locked: true });
 			continue;
 		}
 		max = Math.min(max, hullBound(data, group.hull));
 		candidates.push({ data, max: banned ? 0 : max });
+	}
+	// An outfit that some other can replace outright (see usefulCopies) is capped, but only against replacements that can be
+	// had in any number, so the swap is always possible.
+	const replacements = candidates.filter(c => c.max >= MAX_UNBOUNDED && !c.locked).map(c => c.data);
+	for(const c of candidates)
+	{
+		if(c.locked || c.max <= 0 || con.mustContain.some(r => r.kind === "outfit" && r.name === c.data.name))
+			continue;
+		const useful = usefulCopies(c.data, replacements);
+		if(useful !== null)
+			c.max = Math.min(c.max, useful);
 	}
 	candidates.sort((a, b) => a.data.name.localeCompare(b.data.name));
 
@@ -146,14 +169,19 @@ function hullBound(data: OutfitData, hull: Record<string, number>): number {
 export function unsatisfiable(problem: Problem): string[] {
 	const con = problem.constraints;
 	const out: string[] = [];
-	const hasDrive = (key: string): boolean => (problem.hull[key] ?? 0) > 0
-		|| problem.pool.some((p, i) => (p.attrs[key] ?? 0) > 0 && (problem.havePerShip[i] > 0 || p.max > 0));
-	if(con.requireHyperdrive && !hasDrive("hyperdrive") && !hasDrive("scram drive"))
-		out.push("Must have hyperdrive: no hyperdrive or scram drive is available to every ship in this group");
-	if(con.requireJumpDrive && !hasDrive("jump drive"))
-		out.push(`Must have jump drive: none is available to each of this group's ${problem.shipCount} ships from what you own, what is sold, or what the plunderable setting allows`);
-	for(const attribute of con.requiredAttributes)
-		if(!hasDrive(attribute))
-			out.push(`Must have ${attribute}: no outfit that provides it is available to every ship in this group`);
+	const hasDrive = (key: string): number => ((problem.hull[key] ?? 0) > 0
+		|| problem.pool.some((p, i) => (p.attrs[key] ?? 0) > 0 && (problem.havePerShip[i] > 0 || p.max > 0))) ? 1 : 0;
+	for(const r of con.mustContain)
+	{
+		if(r.kind === "attribute")
+		{
+			if(!attributeMet(r.name, hasDrive))
+				out.push(`Must contain ${requirementLabel(r)}: none is available to each of this group's ${problem.shipCount} ships from what you own, what is sold, or what the plunderable setting allows`);
+			continue;
+		}
+		const item = problem.pool.find(p => p.name === r.name);
+		if(!item || item.max < r.count)
+			out.push(`Must contain ${r.name}${r.count > 1 ? ` ×${r.count}` : ""}: ${item ? `only ${item.max} per ship can be had` : "it is not available from what you own, what is sold, or what the plunderable setting allows"}`);
+	}
 	return out;
 }

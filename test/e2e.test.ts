@@ -18,7 +18,7 @@ test("Hurricane group: baseline is feasible and GA does not regress", { skip: !p
 	assert.ok(group.ships.length > 1);
 	const built = buildProblem({
 		group, save, outfits, sources: new Set(outfits.map((o: any) => o.source)),
-		weights: DEFAULT_WEIGHTS, constraints: { ...DEFAULT_CONSTRAINTS, instantaneousOnly: false, noAmmo: false, requireJumpDrive: false, positiveEnergy: false, heatSustainable: false, ownedLimits: true }, adv: DEFAULT_ADVANCED,
+		weights: DEFAULT_WEIGHTS, constraints: { ...DEFAULT_CONSTRAINTS, instantaneousOnly: false, noAmmo: false, mustContain: DEFAULT_CONSTRAINTS.mustContain.filter(r => r.name !== "jump drive"), positiveEnergy: false, heatSustainable: false, ownedLimits: true }, adv: DEFAULT_ADVANCED,
 	});
 	const base = evaluate(built.problem, built.baseline);
 	console.log("pool", built.problem.pool.length, "violation", base.violation);

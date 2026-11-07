@@ -3,7 +3,7 @@ import type { OutfitData, PlunderData } from "../../data-prep/src/types.ts";
 import { plunderRaces } from "../core/plunder.ts";
 import {
 	type Advanced, type Constraints, DEFAULT_ADVANCED, DEFAULT_CONSTRAINTS, DEFAULT_WEIGHTS,
-	STAT_KEYS, STAT_LABELS, type StatKey, type Weights,
+	STAT_KEYS, STAT_LABELS, type StatKey, type Weights, loadConstraints,
 } from "../core/model.ts";
 import { type Built, buildProblem, unsatisfiable } from "../core/problem.ts";
 import { defaultSources, isGameSource, obtainableOutfits, sourceAccess } from "../core/sources.ts";
@@ -17,6 +17,7 @@ import { createPool } from "../ga/pool.ts";
 import { type SaveData, parseSave } from "../save/parseSave.ts";
 import { Chart } from "./Chart.tsx";
 import { ProgressBar } from "./ProgressBar.tsx";
+import { RequirementBox } from "./RequirementBox.tsx";
 // marker: where the current loadout sits on this stat, 0 (cheapest valid loadout) to 1 (best this ship can reach); a caret above the track.
 function SliderRow(p: { label: string; min: number; max: number; step: number; value: number; onChange: (v: number) => void; marker?: number | null; hint?: string }) {
 	const set = (v: number): void => p.onChange(Math.min(p.max, Math.max(p.min, Number((Math.round(v / p.step) * p.step).toFixed(4)))));
@@ -55,11 +56,11 @@ const ZERO: Weights = Object.fromEntries(STAT_KEYS.map(k => [k, 0])) as Weights;
 const BULK_TRADER = {
 	"Nimble": { cargo: 70, turning: 40, thrust: 40, maxSpeed: 30, offence: 10, shieldRegen: 10, jumps: 20, fuelCapacity: 10 },
 	"Balanced": {
-		cargo: 70, offence: 30, shieldRegen: 25, hullRepair: 10, shieldProtection: 10, hullProtection: 10, missileDefence: 20,
+		cargo: 70, offence: 30, shieldRegen: 25, hullRepair: 10, hullProtection: 10, missileDefence: 20,
 		turning: 20, thrust: 20, maxSpeed: 15, jumps: 25, fuelCapacity: 10,
 	},
 	"Tank": {
-		cargo: 70, offence: 20, shieldRegen: 50, hullRepair: 30, shieldProtection: 25, hullProtection: 25, missileDefence: 30,
+		cargo: 70, offence: 20, shieldRegen: 50, hullRepair: 30, hullProtection: 25, missileDefence: 30,
 		jumps: 20, fuelCapacity: 10,
 	},
 	"Max carry": { cargo: 100, shieldRegen: 5, jumps: 20, fuelCapacity: 20 },
@@ -68,11 +69,11 @@ const BULK_TRADER = {
 // Boarder, also Advanced-only in this form: spare crew first, then how much of the ship goes to surviving the approach.
 const BOARDER = {
 	"Defensive": {
-		spareCrew: 50, shieldRegen: 40, hullRepair: 25, shieldProtection: 25, hullProtection: 25, missileDefence: 30,
+		spareCrew: 50, shieldRegen: 40, hullRepair: 25, hullProtection: 25, missileDefence: 30,
 		offence: 15, turning: 10, thrust: 10, jumps: 10, fuelCapacity: 5,
 	},
 	"Balanced": {
-		spareCrew: 70, offence: 30, shieldRegen: 30, hullRepair: 15, shieldProtection: 10, hullProtection: 10, missileDefence: 20,
+		spareCrew: 70, offence: 30, shieldRegen: 30, hullRepair: 15, hullProtection: 10, missileDefence: 20,
 		turning: 15, thrust: 15, maxSpeed: 10, jumps: 10, fuelCapacity: 5,
 	},
 	"Max Troops": { spareCrew: 100, shieldRegen: 5, jumps: 10, fuelCapacity: 5 },
@@ -83,7 +84,7 @@ function expandSimple(s: Simple): Weights {
 	return {
 		...ZERO,
 		offence: s.offence,
-		shieldRegen: s.defence * 0.35, shieldProtection: s.defence * 0.1, hullProtection: s.defence * 0.1,
+		shieldRegen: s.defence * 0.35, hullProtection: s.defence * 0.1,
 		hullRepair: s.defence * 0.15, missileDefence: s.defence * 0.3,
 		turning: s.manoeuvre * 0.4, thrust: s.manoeuvre * 0.35, maxSpeed: s.manoeuvre * 0.25,
 		jumps: s.logistics * 0.35, fuelCapacity: s.logistics * 0.25, fuelRegen: s.logistics * 0.25, cargo: s.logistics * 0.15,
@@ -108,16 +109,14 @@ const CONSTRAINT_LABELS: Array<[keyof Constraints, string, boolean?, string?]> =
 		"Uses only the copies you already own, so there is nothing to buy. Off: any outfit sold by the selected sources can be bought in any number."],
 	["ignoreLicenses", "Ignore licenses", false,
 		"Outfits that need a license you do not hold are normally left out. Ticked: they are allowed anyway."],
+	["noNegativeShieldProtection", "No negative shield protection", false,
+		"Rejects loadouts whose shield protection adds up below zero, which makes the ship take more shield damage."],
 	["includeShrouded", "Include shrouded outfitters"],
 ];
-const MUST_CONTAIN: Array<[keyof Constraints, string, string?]> = [
-	["requireHyperdrive", "Hyperdrive"],
-	["requireJumpDrive", "Jump drive", "Every ship must carry a jump drive, which can also reach systems that are not linked by hyperlane."],
-	["requireRamscoop", "Ramscoop"],
-];
-const ATTRIBUTE_INFO = "Some planets are only reachable if this outfit is equipped. If you do not own this outfit and have not reached a planet that sells it, the option is disabled.";
+const BASE_ABILITIES = ["hyperdrive", "jump drive", "ramscoop", "afterburner thrust"].map(name => ({ name }));
 const MINIMUM_INFO = {
 	minFuel: "Rejects loadouts whose fuel capacity is below this.",
+	maxFuel: "Rejects loadouts whose fuel capacity is above this. 0 turns the limit off. A hull that already holds more than this is held to its own capacity.",
 	minCargo: "Rejects loadouts whose cargo space is below this.",
 	minBunks: "Rejects loadouts with fewer spare bunks than this. Spare bunks are bunks beyond the crew the ship needs, and they hold boarding parties.",
 };
@@ -153,6 +152,14 @@ export function App() {
 	// Outfitter sets as the save left them: events that fired add outfits to some of them.
 	const outfitSets = useMemo(() => (baseSets && baseMap && save ? applyEventSets(baseSets, baseMap.events, save.events) : baseSets), [baseSets, baseMap, save]);
 	const mapData = useMemo(() => (baseMap && save ? applyEvents(baseMap, save.events) : baseMap), [baseMap, save]);
+	// What can be bought right now: outfits in sets that planets you can land on carry after the fired events.
+	const offered = useMemo(() => {
+		if(!mapData || !outfitSets || !save)
+			return null;
+		const planets = landablePlanets(Object.keys(mapData.planetSets), mapData, save.reputation);
+		const shown = constraints.includeShrouded ? planets : unshroudedPlanets(planets, mapData);
+		return new Set(shown.flatMap(p => (mapData.planetSets[p] ?? []).flatMap(s => outfitSets[s] ?? [])));
+	}, [mapData, outfitSets, save, constraints.includeShrouded]);
 	const stop = useRef(false);
 	const [limits, setLimits] = useState<{ key: string; limits: Limits } | null>(null);
 	const [limitsBusy, setLimitsBusy] = useState(false);
@@ -200,10 +207,17 @@ export function App() {
 	// Whatever the save has reached is ticked by default; the rest stay unticked.
 	useEffect(() => {
 		if(reachable)
-			setConstraints(c => ({ ...c, requiredAttributes: [...reachable] }));
+			setConstraints(c => ({
+				...c,
+				mustContain: [
+					...c.mustContain.filter(r => !(r.kind === "attribute" && accessAttributes.includes(r.name))),
+					...[...reachable].map(name => ({ kind: "attribute" as const, name, count: 1 })),
+				],
+			}));
 	}, [reachable]);
 
 	const group = save?.groups.find(g => g.id === groupId);
+	const equipped = useMemo(() => Object.keys(group?.outfits ?? {}), [group]);
 	const sourceCounts = useMemo(() => {
 		const m = new Map<string, { total: number; licensed: number }>();
 		const licensed = new Set(save?.licenses ?? []);
@@ -240,14 +254,14 @@ export function App() {
 
 	// The advanced sliders show where the current loadout stands for the selected group. The limits depend on the pool and
 	// non-negotiables, not on the weights, so they are recomputed only when those change.
-	const limitsKey = group ? JSON.stringify([group.id, [...sources].sort(), constraints, adv, !!save, !!plunderData]) : "";
+	const limitsKey = group ? JSON.stringify([group.id, [...sources].sort(), constraints, adv, !!save, !!plunderData, offered?.size ?? 0]) : "";
 	useEffect(() => {
 		if(mode !== "advanced" || !group || !save || !outfits.length || running || limits?.key === limitsKey)
 			return;
 		let cancelled = false;
 		let pool: ReturnType<typeof createPool> | null = null;
 		const timer = setTimeout(async () => {
-			const built = buildProblem({ group, save, outfits, sources, weights: DEFAULT_WEIGHTS, constraints, adv, plunder: plunderData });
+			const built = buildProblem({ group, save, outfits, sources, weights: DEFAULT_WEIGHTS, constraints, adv, plunder: plunderData, offered });
 			if(unsatisfiable(built.problem).length)
 				return;
 			setLimitsBusy(true);
@@ -287,7 +301,7 @@ export function App() {
 		setLoaded("");
 		const activeWeights = mode === "advanced" ? weights : expandSimple(mode === "simple" ? ARCHETYPES[archetype] : simple);
 		const activeAdv = mode === "advanced" ? adv : DEFAULT_ADVANCED;
-		const built = buildProblem({ group, save, outfits, sources, weights: activeWeights, constraints, adv: activeAdv, plunder: plunderData });
+		const built = buildProblem({ group, save, outfits, sources, weights: activeWeights, constraints, adv: activeAdv, plunder: plunderData, offered });
 		const blocked = unsatisfiable(built.problem);
 		if(blocked.length)
 		{
@@ -354,9 +368,9 @@ export function App() {
 			if(!target)
 				throw new Error(`this save has no ${saved.model} group with that loadout`);
 			const built = buildProblem({
-				group: target, save, outfits, sources: new Set(saved.sources), plunder: plunderData,
+				group: target, save, outfits, sources: new Set(saved.sources), plunder: plunderData, offered,
 				// Loadouts saved before the three-way setting stored plunder as a yes/no.
-				weights: { ...DEFAULT_WEIGHTS, ...saved.weights }, constraints: { ...DEFAULT_CONSTRAINTS, ...saved.constraints, plunder: (saved.constraints as { plunder?: unknown }).plunder === true ? "all" : ["aggressive", "all"].includes((saved.constraints as { plunder?: string }).plunder ?? "") ? (saved.constraints as { plunder: Constraints["plunder"] }).plunder : "none" },
+				weights: { ...DEFAULT_WEIGHTS, ...saved.weights }, constraints: loadConstraints(saved.constraints),
 				adv: { ...DEFAULT_ADVANCED, ...saved.adv },
 			});
 			const genome = new Int16Array(built.problem.pool.length);
@@ -387,7 +401,7 @@ export function App() {
 			return;
 		const allSources = outfits.map(o => o.source).filter(isGameSource);
 		const built = buildProblem({
-			plunder: plunderData,
+			plunder: plunderData, offered,
 			group: target, save, outfits, sources: new Set(allSources),
 			weights: mode === "advanced" ? weights : expandSimple(mode === "simple" ? ARCHETYPES[archetype] : simple),
 			constraints: { ...DEFAULT_CONSTRAINTS, instantaneousOnly: false, noAmmo: false, ignoreLicenses: true, plunder: "all", ownedLimits: false },
@@ -489,26 +503,6 @@ export function App() {
 								{info && <Info text={info} />}
 							</label>
 						))}
-						<div className="muted">Must contain:</div>
-						{MUST_CONTAIN.map(([key, label, info]) => (
-							<label key={key}>
-								<input type="checkbox" checked={constraints[key] as boolean} onChange={e => setConstraints(c => ({ ...c, [key]: e.target.checked }))} />
-								<span>{label}</span>
-								{info && <Info text={info} />}
-							</label>
-						))}
-						{accessAttributes.map(attribute => (
-							<label key={attribute} className={reachable && !reachable.has(attribute) ? "disabled" : undefined}
-								title={reachable && !reachable.has(attribute) ? "Not reached yet" : undefined}>
-								<input type="checkbox" disabled={!!reachable && !reachable.has(attribute)} checked={constraints.requiredAttributes.includes(attribute)}
-									onChange={e => setConstraints(c => ({
-										...c,
-										requiredAttributes: e.target.checked ? [...c.requiredAttributes, attribute] : c.requiredAttributes.filter(a => a !== attribute),
-									}))} />
-								<span>{attribute.charAt(0).toUpperCase() + attribute.slice(1)}</span>
-								<Info text={ATTRIBUTE_INFO} />
-							</label>
-						))}
 						<div className="muted">Plunderable outfits:</div>
 						{([["none", "None"], ["aggressive", "Aggressive sources only"], ["all", "All"]] as const).map(([value, label]) => (
 							<label key={value}>
@@ -519,9 +513,9 @@ export function App() {
 						))}
 						<details>
 							<summary>Advanced</summary>
-							{(["minFuel", "minCargo", "minBunks"] as const).map(key => (
+							{(["minFuel", "maxFuel", "minCargo", "minBunks"] as const).map(key => (
 								<label key={key}>
-									<span>{{ minFuel: "Min fuel capacity", minCargo: "Min cargo space", minBunks: "Min spare crew" }[key]}</span>
+									<span>{{ minFuel: "Min fuel capacity", maxFuel: "Max fuel capacity", minCargo: "Min cargo space", minBunks: "Min spare crew" }[key]}</span>
 									<input type="number" min={0} value={constraints[key]} onChange={e => setConstraints(c => ({ ...c, [key]: Number(e.target.value) }))} />
 									<Info text={MINIMUM_INFO[key]} />
 								</label>
@@ -529,6 +523,12 @@ export function App() {
 						</details>
 					</div>
 				</Fold>
+
+				<RequirementBox title="Must contain" counted items={constraints.mustContain} outfits={outfits} equipped={equipped}
+					abilities={[...BASE_ABILITIES, ...accessAttributes.map(name => ({ name, disabled: !!reachable && !reachable.has(name) }))]}
+					onChange={mustContain => setConstraints(c => ({ ...c, mustContain }))} />
+				<RequirementBox title="Must not contain" counted={false} items={constraints.mustNotContain} outfits={outfits} equipped={equipped} abilities={BASE_ABILITIES}
+					onChange={mustNotContain => setConstraints(c => ({ ...c, mustNotContain }))} />
 			</div>
 
 			<div className="col">
@@ -622,7 +622,7 @@ export function App() {
 					</>}
 				</div>
 
-				{result && save && group && result.groupId === group.id && <Results result={result} save={save} group={group} outfits={outfits} map={mapData} outfitSets={outfitSets} plunder={plunderData} />}
+				{result && save && group && result.groupId === group.id && <Results result={result} save={save} group={group} outfits={outfits} map={mapData} outfitSets={outfitSets} plunder={plunderData} offered={offered} />}
 			</div>
 		</div>
 	);
@@ -641,8 +641,9 @@ interface SavedLoadout {
 	sources: string[];
 }
 
-function Results({ result, save, group, outfits, map, outfitSets, plunder }: {
+function Results({ result, save, group, outfits, map, outfitSets, plunder, offered }: {
 	plunder: PlunderData | null;
+	offered: Set<string> | null;
 	result: { built: Built; outcome: GAOutcome };
 	save: SaveData;
 	group: NonNullable<SaveData["groups"][number]>;
@@ -654,7 +655,7 @@ function Results({ result, save, group, outfits, map, outfitSets, plunder }: {
 	const problem = built.problem;
 	const pick = outcome.best;
 	const base = useMemo(() => evaluate(problem, built.baseline), [built]);
-	const buyable = useMemo(() => new Set(outfits.filter(o => o.sold || o.soldAfter?.some(e => save.events.includes(e))).map(o => o.name)), [outfits, save]);
+	const buyable = useMemo(() => offered ?? new Set(outfits.filter(o => o.sold || o.soldAfter?.some(e => save.events.includes(e))).map(o => o.name)), [outfits, save, offered]);
 	const lines = useMemo(() => shoppingList(problem, pick.genome, group, save, buyable), [pick]);
 	const trip = useMemo(() => {
 		if(!map || !outfitSets)

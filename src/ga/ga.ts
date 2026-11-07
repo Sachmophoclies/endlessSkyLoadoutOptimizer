@@ -389,7 +389,8 @@ export async function runSearch(
 }
 
 // Steepest-ascent local search: every single add, remove and swap that keeps the capacities legal is scored, and the best
-// improvement is taken until none is left.
+// improvement is taken until none is left. Two-for-one trades (two small bunk rooms for one bunk room) are tried as well,
+// since no single step of them is an improvement.
 async function hillClimb(
 	problem: Problem, ownedPerShip: number[], start: Individual, scorer: Scorer, evaluate: Evaluator, shouldStop: () => boolean,
 ): Promise<Individual> {
@@ -432,6 +433,16 @@ async function hillClimb(
 				const swapped = Int16Array.from(removed);
 				swapped[i]++;
 				consider(swapped);
+				if(current.genome[o] >= 2)
+				{
+					const merged = Int16Array.from(removed); // two of `o` become one of `i`
+					merged[o]--;
+					merged[i]++;
+					consider(merged);
+				}
+				const split = Int16Array.from(swapped); // one of `o` becomes two of `i`
+				split[i]++;
+				consider(split);
 			}
 		}
 		if(!neighbours.length)
